@@ -224,6 +224,6 @@ TramitIA is an educational MVP that provides automated document checks for suppo
 
 ## Author
 
-**Your Name**
+**Arnau Martí Ruiz**
 
 Junior developer portfolio project built to explore PDF analysis workflows with FastAPI and PostgreSQL.
