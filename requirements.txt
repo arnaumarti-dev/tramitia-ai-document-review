@@ -1,0 +1,6 @@
+﻿fastapi
+uvicorn[standard]
+pypdf
+psycopg2-binary
+python-multipart
+pydantic

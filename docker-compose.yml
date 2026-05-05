@@ -1,0 +1,15 @@
+﻿services:
+  postgres:
+    image: postgres:16
+    container_name: tramitia-postgres
+    environment:
+      POSTGRES_USER: tramitia
+      POSTGRES_PASSWORD: tramitia
+      POSTGRES_DB: tramitia
+    ports:
+      - "5432:5432"
+    volumes:
+      - tramitia_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  tramitia_postgres_data:
