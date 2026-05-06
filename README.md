@@ -68,6 +68,16 @@ tramitia-ai-document-review/
 
 ### 2) Install dependencies
 
+Windows PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+Linux/macOS:
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
@@ -94,9 +104,26 @@ export POSTGRES_USER=tramitia
 export POSTGRES_PASSWORD=tramitia
 ```
 
-### 4) Create database table (manual step)
+### 4) Create database table
 
-This MVP expects an `analyses` table. If it does not exist, create it manually in your local database before running tests.
+Before running the app, create the `analyses` table in PostgreSQL:
+
+```sql
+CREATE TABLE IF NOT EXISTS analyses (
+    id SERIAL PRIMARY KEY,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    filename TEXT NOT NULL,
+    pages INTEGER,
+    chars INTEGER,
+    document_type TEXT,
+    score INTEGER,
+    status TEXT,
+    summary TEXT,
+    findings_json JSONB,
+    extracted_text TEXT,
+    text_sha256 TEXT
+);
+```
 
 ### 5) Run the API
 
@@ -109,8 +136,17 @@ Backend default URL:
 
 ### 6) Open the dashboard
 
-- Open `http://127.0.0.1:8000/` (served by FastAPI)
-- Or access static assets under `/frontend`
+The frontend dashboard is served directly by FastAPI:
+
+```text
+http://127.0.0.1:8000/
+```
+
+Swagger API docs:
+
+```text
+http://127.0.0.1:8000/docs
+```
 
 ## Docker / PostgreSQL Instructions
 
@@ -217,10 +253,16 @@ Base URL: `http://127.0.0.1:8000`
 - Add user authentication and role-based access.
 - Improve explainability of scoring and findings.
 - Add containerized backend service for one-command local startup.
+- Add AI-based requirement extraction from official calls or instructions.
+- Compare user documents against automatically extracted requirements.
 
 ## Disclaimer
 
 TramitIA is an educational MVP that provides automated document checks for support workflows. It **does not** replace legal, administrative, or professional advice, and should not be used as the sole basis for legal or procedural decisions.
+
+## License
+
+This project is licensed under the MIT License.
 
 ## Author
 
