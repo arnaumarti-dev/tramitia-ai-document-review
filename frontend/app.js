@@ -1,235 +1,322 @@
-const API = window.location.origin;
+const API = ""; // relative API: same backend that serves this frontend
+    let limit = 10;
+    let offset = 0;
+    let total = 0;
 
-let page = 0;
-const limit = 10;
+    const $ = (id) => document.getElementById(id);
 
-const el = (id) => document.getElementById(id);
+    function statusClass(status) {
+      const s = (status || "").toUpperCase();
+      if (s === "OK") return "ok";
+      if (s === "REVISAR") return "warn";
+      return "risk";
+    }
 
-function statusBadge(status) {
-  const s = (status || "").toUpperCase();
-  let cls = "warn";
-  if (s === "OK") cls = "ok";
-  if (s === "RIESGO" || s === "RISK") cls = "risk";
+    function statusBadge(status) {
+      const cls = statusClass(status);
+      return `<span class="badge ${cls}"><span class="dot"></span>${status || "-"}</span>`;
+    }
 
-  return `<span class="badge ${cls}">
-    <span class="dot"></span>${status}
-  </span>`;
-}
+    function severityClass(severity) {
+      const s = (severity || "").toLowerCase();
+      if (s === "error") return "error";
+      if (s === "warning") return "warning";
+      return "info";
+    }
 
-function severityClass(sev) {
-  const s = (sev || "").toLowerCase();
-  if (s === "error") return "sev-error";
-  if (s === "warning") return "sev-warning";
-  return "sev-info";
-}
+    function scoreColor(score) {
+      if (score >= 75) return "var(--ok)";
+      if (score >= 55) return "var(--warn)";
+      return "var(--risk)";
+    }
 
-function progressColor(score) {
-  if (score >= 75) return "var(--ok)";
-  if (score >= 55) return "var(--warn)";
-  return "var(--risk)";
-}
+    function clampScore(score) {
+      return Math.max(0, Math.min(100, Number(score || 0)));
+    }
 
-/* ---------- RESULT RENDER ---------- */
-function renderResult(data) {
-  const findings = data.findings || [];
-  const score = data.score ?? 0;
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
 
-  const findingsHtml = findings.length
-    ? `<ul class="findings">
-        ${findings.map(f => `
-          <li>
-            <span class="${severityClass(f.severity)}">[${(f.severity || "").toUpperCase()}]</span>
-            ${f.message || ""}
-            ${f.hint ? `<span class="muted"> — ${f.hint}</span>` : ""}
-          </li>
-        `).join("")}
-      </ul>`
-    : `<div class="muted">No hay findings.</div>`;
+    function formatDate(value) {
+      return (value || "").replace("T", " ").slice(0, 19);
+    }
 
-  el("resultArea").innerHTML = `
-    <div class="result-grid">
-      <div class="result-card">
-        <div class="result-title">${data.filename || "Documento"}</div>
-        <div class="result-meta">
-          ${statusBadge(data.status)}
-          <div class="kv"><b>Score:</b> ${score}/100</div>
-          <div class="kv"><b>Páginas:</b> ${data.pages ?? "-"}</div>
-          <div class="kv"><b>Chars:</b> ${data.chars ?? "-"}</div>
+    async function checkHealth() {
+      try {
+        const res = await fetch(API + "/health");
+        if (!res.ok) throw new Error("offline");
+        $("apiDot").classList.add("online");
+        $("apiStatus").textContent = "API online · " + window.location.host;
+      } catch {
+        $("apiDot").classList.remove("online");
+        $("apiStatus").textContent = "API offline · " + window.location.host;
+      }
+    }
+
+    function buildQuery() {
+      const params = new URLSearchParams();
+      params.set("limit", limit);
+      params.set("offset", offset);
+
+      const filename = $("f_filename").value.trim();
+      const minScore = $("f_minscore").value.trim();
+      const status = $("f_status").value;
+
+      if (filename) params.set("filename", filename);
+      if (minScore !== "") params.set("min_score", minScore);
+      if (status) params.set("status", status);
+
+      return params.toString();
+    }
+
+    function renderError(targetId, title, message, error = null) {
+      $(targetId).innerHTML = `
+        <div class="error-box">
+          <strong>${escapeHtml(title)}</strong>
+          <div>${escapeHtml(message)}</div>
+          ${error ? `<pre>${escapeHtml(error.message || error)}</pre>` : ""}
         </div>
-
-        <div class="progress"><div id="pbar"></div></div>
-        <div class="muted">${data.summary || ""}</div>
-      </div>
-
-      <div class="result-card">
-        <div class="result-title">Detalles</div>
-        ${findingsHtml}
-      </div>
-    </div>
-  `;
-
-  const bar = document.getElementById("pbar");
-  bar.style.width = `${Math.max(0, Math.min(100, score))}%`;
-  bar.style.background = progressColor(score);
-}
-
-/* ---------- ANALYZE ---------- */
-async function analyze() {
-  const f = el("file");
-  if (!f.files.length) return alert("Selecciona un PDF");
-
-  const form = new FormData();
-  form.append("file", f.files[0]);
-
-  el("resultArea").innerHTML = `<div class="empty-state">
-    <div class="empty-title">Analizando...</div>
-    <div class="muted">Procesando PDF y validando reglas</div>
-  </div>`;
-
-  try {
-    const res = await fetch(API + "/analyze", { method: "POST", body: form });
-
-    if (!res.ok) {
-      throw new Error(`Error ${res.status}`);
+      `;
     }
 
-    const data = await res.json();
+    function renderAnalysis(data) {
+      const score = clampScore(data.score);
+      const color = scoreColor(score);
+      const findings = data.findings || [];
 
-    renderResult(data);
-    await loadAnalyses();
-  } catch (error) {
-    el("resultArea").innerHTML = `
-      <div class="empty-state">
-        <div class="empty-title">Error al analizar el PDF</div>
-        <div class="muted">Comprueba que el backend esté corriendo en ${API}</div>
-      </div>
-    `;
-  }
-}
+      const findingsHtml = findings.length
+        ? `<ul class="findings">
+            ${findings.map((f) => `
+              <li>
+                <span class="severity ${severityClass(f.severity)}">[${escapeHtml((f.severity || "").toUpperCase())}]</span>
+                ${escapeHtml(f.message || f.code || "")}
+                ${f.hint ? `<div class="muted">${escapeHtml(f.hint)}</div>` : ""}
+              </li>
+            `).join("")}
+          </ul>`
+        : `<div class="empty-state"><strong>Sin hallazgos</strong>No se han detectado incidencias relevantes.</div>`;
 
-/* ---------- LIST / FILTERS ---------- */
-function readFilters() {
-  return {
-    filename: el("fFilename").value.trim(),
-    min_score: Number(el("fMinScore").value || 0),
-    status: el("fStatus").value.trim(),
-  };
-}
+      $("analysisCard").innerHTML = `
+        <div class="result-card">
+          <div class="result-top">
+            <div>
+              <div class="doc-title">${escapeHtml(data.filename || "Documento")}</div>
+              <div class="doc-meta">
+                <span class="kv">ID: ${escapeHtml(data.id ?? "-")}</span>
+                <span class="kv">${escapeHtml(data.pages ?? "-")} pág.</span>
+                <span class="kv">${escapeHtml(data.chars ?? "-")} chars</span>
+                <span class="kv">${escapeHtml(data.document_type || "-")}</span>
+                ${statusBadge(data.status)}
+              </div>
+            </div>
+            <div class="score-ring" style="background: conic-gradient(${color} ${score * 3.6}deg, rgba(148, 163, 184, 0.16) 0deg)">
+              <span>${score}</span>
+            </div>
+          </div>
 
-async function loadAnalyses() {
-  const { filename, min_score, status } = readFilters();
+          <div class="progress"><div style="width:${score}%; background:${color}"></div></div>
+          <div class="summary"><strong>Resumen:</strong> ${escapeHtml(data.summary || "Sin resumen disponible.")}</div>
 
-  const qs = new URLSearchParams();
-  qs.set("limit", limit);
-  qs.set("offset", page * limit);
-
-  // Estos parámetros deben existir en tu backend.
-  // Si todavía no los has metido, te los meto yo en el main + repository.
-  if (filename) qs.set("filename", filename);
-  if (min_score && min_score > 0) qs.set("min_score", String(min_score));
-  if (status) qs.set("status", status);
-
-  const res = await fetch(`${API}/analyses?${qs.toString()}`);
-
-if (!res.ok) {
-  el("historyBody").innerHTML = `
-    <tr>
-      <td colspan="5">
-        <div class="muted">No se pudo cargar el historial.</div>
-      </td>
-    </tr>
-  `;
-  return;
-}
-
-const data = await res.json();
-
-  const items = data.items || [];
-  const tbody = items.length ? items.map(row => `
-      <tr data-id="${row.id}">
-        <td>${row.id}</td>
-        <td>${row.filename}</td>
-        <td>${statusBadge(row.status)}</td>
-        <td>${row.score}</td>
-        <td class="muted">${(row.created_at || "").replace("T"," ").slice(0,19)}</td>
-      </tr>
-    `).join("")
-    : `<tr><td colspan="5"><div class="muted">No hay resultados</div></td></tr>`;
-
-  el("historyBody").innerHTML = tbody;
-  el("pageInfo").textContent = `Página ${page + 1}`;
-
-  // click row -> modal detail
-  document.querySelectorAll("#historyBody tr[data-id]").forEach(tr => {
-    tr.addEventListener("click", () => openDetail(tr.dataset.id));
-  });
-}
-
-/* ---------- DETAIL MODAL ---------- */
-async function openDetail(id) {
-  const res = await fetch(API + "/analyses/" + id);
-  const data = await res.json();
-
-  el("modalTitle").textContent = `Análisis #${data.id}`;
-  el("modalSubtitle").textContent = data.filename || "";
-
-  el("modalContent").innerHTML = `
-    <div class="result-meta" style="margin:0 0 10px;">
-      ${statusBadge(data.status)}
-      <div class="kv"><b>Score:</b> ${data.score}/100</div>
-      <div class="kv"><b>Fecha:</b> ${(data.created_at || "").replace("T"," ").slice(0,19)}</div>
-      <div class="kv"><b>Tipo:</b> ${data.document_type || "-"}</div>
-      <a class="export-link" href="${API}/analyses/${id}/export" target="_blank">
-  Exportar JSON
-</a>
-    </div>
-
-    <div class="progress"><div style="width:${data.score}%; background:${progressColor(data.score)}"></div></div>
-
-    <div class="muted" style="margin:10px 0 14px;">${data.summary || ""}</div>
-
-    <h3 style="margin:0 0 8px;">Findings</h3>
-    ${
-      (data.findings || []).length
-      ? `<ul class="findings">${
-          data.findings.map(f => `
-            <li>
-              <span class="${severityClass(f.severity)}">[${(f.severity || "").toUpperCase()}]</span>
-              ${f.message || f.code || ""}
-              ${f.hint ? `<span class="muted"> — ${f.hint}</span>` : ""}
-            </li>
-          `).join("")
-        }</ul>`
-      : `<div class="muted">No hay findings.</div>`
+          <h3 style="margin:18px 0 0;">Validaciones detectadas</h3>
+          ${findingsHtml}
+        </div>
+      `;
     }
-  `;
 
-  el("modal").classList.add("open");
-}
+    async function analyze() {
+      const fileInput = $("file");
+      if (!fileInput.files.length) {
+        alert("Selecciona un PDF");
+        return;
+      }
 
-function closeModal() {
-  el("modal").classList.remove("open");
-}
+      $("analysisCard").innerHTML = `
+        <div class="empty-state loading">
+          <strong>Analizando PDF...</strong>
+          Extrayendo texto, aplicando reglas y guardando el informe en PostgreSQL.
+        </div>
+      `;
 
-/* ---------- EVENTS ---------- */
-document.addEventListener("DOMContentLoaded", async () => {
-  el("btnAnalyze").addEventListener("click", analyze);
-  el("btnRefresh").addEventListener("click", loadAnalyses);
+      try {
+        const form = new FormData();
+        form.append("file", fileInput.files[0]);
 
-  el("btnApply").addEventListener("click", () => { page = 0; loadAnalyses(); });
-  el("btnClear").addEventListener("click", () => {
-    el("fFilename").value = "";
-    el("fMinScore").value = 0;
-    el("fStatus").value = "";
-    page = 0;
-    loadAnalyses();
-  });
+        const res = await fetch(API + "/analyze", { method: "POST", body: form });
+        if (!res.ok) {
+          const errorText = await res.text();
+          throw new Error(`HTTP ${res.status}: ${errorText}`);
+        }
 
-  el("btnPrev").addEventListener("click", () => { if (page > 0) page--; loadAnalyses(); });
-  el("btnNext").addEventListener("click", () => { page++; loadAnalyses(); });
+        const data = await res.json();
+        renderAnalysis(data);
+        offset = 0;
+        await loadAnalyses(false);
+      } catch (error) {
+        renderError("analysisCard", "Error al analizar el PDF", `Comprueba que el backend esté corriendo en ${window.location.origin}`, error);
+      }
+    }
 
-  el("modalClose").addEventListener("click", closeModal);
-  el("modalBackdrop").addEventListener("click", closeModal);
+    async function loadAnalyses(resetOffset = false) {
+      if (resetOffset) offset = 0;
 
-  await loadAnalyses();
-});
+      try {
+        const res = await fetch(API + "/analyses?" + buildQuery());
+        if (!res.ok) {
+          const errorText = await res.text();
+          throw new Error(`HTTP ${res.status}: ${errorText}`);
+        }
+
+        const data = await res.json();
+        total = Number(data.total || 0);
+        const items = data.items || [];
+
+        $("historyBody").innerHTML = items.length
+          ? items.map((a) => `
+              <tr data-id="${escapeHtml(a.id)}">
+                <td>${escapeHtml(a.id)}</td>
+                <td>${escapeHtml(formatDate(a.created_at))}</td>
+                <td>${escapeHtml(a.filename)}</td>
+                <td>${statusBadge(a.status)}</td>
+                <td class="right"><strong>${escapeHtml(a.score ?? "")}</strong></td>
+                <td class="right">
+                  <a class="export-link" href="${API}/analyses/${encodeURIComponent(a.id)}/export" target="_blank" onclick="event.stopPropagation()">JSON</a>
+                </td>
+              </tr>
+            `).join("")
+          : `<tr><td colspan="6" class="muted">No hay resultados.</td></tr>`;
+
+        document.querySelectorAll("#historyBody tr[data-id]").forEach((row) => {
+          row.addEventListener("click", () => openDetail(row.dataset.id));
+        });
+
+        const from = total === 0 ? 0 : offset + 1;
+        const to = Math.min(offset + limit, total);
+        $("pageInfo").textContent = `Mostrando ${from}-${to} de ${total}`;
+      } catch (error) {
+        $("historyBody").innerHTML = `
+          <tr>
+            <td colspan="6">
+              <div class="error-box">
+                <strong>No se pudo cargar el historial</strong>
+                <div>Comprueba que la API esté disponible en ${API}</div>
+              </div>
+            </td>
+          </tr>
+        `;
+      }
+    }
+
+    async function openDetail(id) {
+      try {
+        const res = await fetch(API + "/analyses/" + encodeURIComponent(id));
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const score = clampScore(data.score);
+        const color = scoreColor(score);
+        const findings = data.findings || [];
+
+        $("modalTitle").textContent = `Análisis #${data.id}`;
+        $("modalSubtitle").textContent = data.filename || "";
+        $("modalContent").innerHTML = `
+          <div class="result-card">
+            <div class="result-top">
+              <div>
+                <div class="doc-meta">
+                  ${statusBadge(data.status)}
+                  <span class="kv">Score: ${escapeHtml(score)}/100</span>
+                  <span class="kv">Fecha: ${escapeHtml(formatDate(data.created_at))}</span>
+                  <span class="kv">Tipo: ${escapeHtml(data.document_type || "-")}</span>
+                </div>
+              </div>
+              <a class="export-link" href="${API}/analyses/${encodeURIComponent(data.id)}/export" target="_blank">Exportar JSON</a>
+            </div>
+
+            <div class="progress"><div style="width:${score}%; background:${color}"></div></div>
+            <div class="summary"><strong>Resumen:</strong> ${escapeHtml(data.summary || "")}</div>
+
+            <h3 style="margin:18px 0 0;">Findings</h3>
+            ${findings.length ? `<ul class="findings">
+              ${findings.map((f) => `
+                <li>
+                  <span class="severity ${severityClass(f.severity)}">[${escapeHtml((f.severity || "").toUpperCase())}]</span>
+                  ${escapeHtml(f.message || f.code || "")}
+                  ${f.hint ? `<div class="muted">${escapeHtml(f.hint)}</div>` : ""}
+                </li>
+              `).join("")}
+            </ul>` : `<div class="empty-state"><strong>Sin hallazgos</strong>No se han detectado incidencias relevantes.</div>`}
+          </div>
+        `;
+        $("modal").classList.add("open");
+        $("modal").setAttribute("aria-hidden", "false");
+      } catch (error) {
+        alert("No se pudo abrir el análisis.");
+      }
+    }
+
+    function closeModal() {
+      $("modal").classList.remove("open");
+      $("modal").setAttribute("aria-hidden", "true");
+    }
+
+    function resetFilters() {
+      $("f_filename").value = "";
+      $("f_minscore").value = "";
+      $("f_status").value = "";
+      offset = 0;
+      loadAnalyses(false);
+    }
+
+    document.addEventListener("DOMContentLoaded", async () => {
+      $("btnAnalyze").addEventListener("click", analyze);
+      $("btnRefresh").addEventListener("click", () => loadAnalyses(false));
+      $("btnApply").addEventListener("click", () => loadAnalyses(true));
+      $("btnClear").addEventListener("click", resetFilters);
+      $("btnPrev").addEventListener("click", () => {
+        offset = Math.max(0, offset - limit);
+        loadAnalyses(false);
+      });
+      $("btnNext").addEventListener("click", () => {
+        if (offset + limit >= total) return;
+        offset += limit;
+        loadAnalyses(false);
+      });
+      $("modalClose").addEventListener("click", closeModal);
+      $("modalBackdrop").addEventListener("click", closeModal);
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeModal();
+      });
+
+      $("file").addEventListener("change", () => {
+        const file = $("file").files[0];
+        $("selectedFile").textContent = file ? file.name : "Ningún archivo seleccionado";
+      });
+
+      const dropZone = $("dropZone");
+      dropZone.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        dropZone.style.borderColor = "rgba(125, 211, 252, 0.85)";
+      });
+      dropZone.addEventListener("dragleave", () => {
+        dropZone.style.borderColor = "rgba(125, 211, 252, 0.34)";
+      });
+      dropZone.addEventListener("drop", (event) => {
+        event.preventDefault();
+        dropZone.style.borderColor = "rgba(125, 211, 252, 0.34)";
+        const file = event.dataTransfer.files[0];
+        if (!file) return;
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(file);
+        $("file").files = dataTransfer.files;
+        $("selectedFile").textContent = file.name;
+      });
+
+      await checkHealth();
+      await loadAnalyses(true);
+      setInterval(checkHealth, 10000);
+    });
