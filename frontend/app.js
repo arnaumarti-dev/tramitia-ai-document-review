@@ -5,9 +5,19 @@ const API = ""; // relative API: same backend that serves this frontend
     let analysisInProgress = false;
     // Tokens live only in memory; do not persist them in localStorage.
     let authToken = null;
+    let currentUserId = null;
+    let currentRole = null;
+    let staffMutationInProgress = false;
 
     function logout() {
       authToken = null;
+      currentUserId = null;
+      currentRole = null;
+      $("staffPanel").hidden = true;
+      $("staffBody").innerHTML = "";
+      $("staffPassword").value = "";
+      $("staffError").textContent = "";
+      $("staffSuccess").textContent = "";
       $("workspace").hidden = true;
       $("loginPanel").hidden = false;
       $("loginPassword").value = "";
@@ -52,11 +62,18 @@ const API = ""; // relative API: same backend that serves this frontend
         const data = await response.json();
         if (!data.access_token) throw new Error("El servidor no devolvió una sesión válida.");
         authToken = data.access_token;
+        currentUserId = data.user_id ?? null;
+        currentRole = data.role ?? null;
         $("loginPassword").value = "";
         $("loginPanel").hidden = true;
         $("workspace").hidden = false;
         $("sessionInfo").textContent = "Gestoría: " + $("loginOrg").value.trim();
+        const mayManage = currentRole === "owner" || currentRole === "admin";
+        $("staffPanel").hidden = !mayManage;
+        $("staffRoleAdmin").hidden = currentRole !== "owner";
+        if (currentRole !== "owner") $("staffRole").value = "employee";
         await loadAnalyses(true);
+        if (mayManage) await loadStaff();
       } catch (error) {
         $("loginError").textContent = error.message || "No se pudo iniciar sesión.";
       } finally {
@@ -65,6 +82,103 @@ const API = ""; // relative API: same backend that serves this frontend
     }
 
     const $ = (id) => document.getElementById(id);
+
+
+    function clearStaffNotices() {
+      $("staffError").textContent = "";
+      $("staffSuccess").textContent = "";
+    }
+
+    function staffResponseMessage(status) {
+      if (status === 403) return "No tienes permisos para gestionar esta cuenta.";
+      if (status === 404) return "Ese empleado no pertenece a esta gestoría.";
+      if (status === 409) return "No se puede crear la cuenta. Comprueba que el correo no esté registrado.";
+      if (status === 422) return "Comprueba el correo, la contraseña y el rol elegido.";
+      if (status >= 500) return "El servidor no ha podido completar la operación.";
+      return "No se pudo completar la operación (HTTP " + status + ").";
+    }
+
+    async function loadStaff() {
+      if (currentRole !== "owner" && currentRole !== "admin") return;
+      const requestToken = authToken;
+      try {
+        const response = await apiFetch("/staff");
+        if (!response.ok) throw new Error(staffResponseMessage(response.status));
+        const data = await response.json();
+        // Prevent a late response from repopulating the DOM after logout.
+        if (!authToken || authToken !== requestToken) return;
+        const items = Array.isArray(data.items) ? data.items : [];
+        $("staffBody").innerHTML = items.length ? items.map((person) => {
+          const canDisable = person.is_active
+            && Number(person.user_id) !== Number(currentUserId)
+            && person.role !== "owner"
+            && (currentRole === "owner" || person.role === "employee");
+          return `<tr>
+            <td>${escapeHtml(person.email)}</td>
+            <td>${escapeHtml(person.role)}</td>
+            <td>${person.is_active ? "Activo" : "Desactivado"}</td>
+            <td>${canDisable
+              ? `<button type="button" class="btn btn-ghost" data-disable-id="${escapeHtml(person.user_id)}">Desactivar</button>`
+              : "—"}</td>
+          </tr>`;
+        }).join("") : '<tr><td colspan="4">No hay empleados.</td></tr>';
+        document.querySelectorAll("#staffBody button[data-disable-id]").forEach((button) => {
+          button.addEventListener("click", () => disableStaff(button.dataset.disableId));
+        });
+      } catch (error) {
+        if (authToken === requestToken) {
+          $("staffError").textContent = error.message || "No se pudo cargar el equipo.";
+        }
+      }
+    }
+
+    async function addStaff(event) {
+      event.preventDefault();
+      if (staffMutationInProgress || !authToken) return;
+      clearStaffNotices();
+      staffMutationInProgress = true;
+      $("btnAddStaff").disabled = true;
+      try {
+        const response = await apiFetch("/staff", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: $("staffEmail").value.trim(),
+            role: $("staffRole").value,
+            password: $("staffPassword").value,
+          }),
+        });
+        if (!response.ok) throw new Error(staffResponseMessage(response.status));
+        $("staffPassword").value = "";
+        $("staffEmail").value = "";
+        $("staffSuccess").textContent = "Empleado añadido correctamente.";
+        await loadStaff();
+      } catch (error) {
+        $("staffError").textContent = error.message || "No se pudo añadir el empleado.";
+      } finally {
+        staffMutationInProgress = false;
+        $("btnAddStaff").disabled = false;
+      }
+    }
+
+    async function disableStaff(userId) {
+      if (staffMutationInProgress || !authToken) return;
+      if (!confirm("¿Desactivar el acceso de este empleado?")) return;
+      clearStaffNotices();
+      staffMutationInProgress = true;
+      try {
+        const response = await apiFetch("/staff/" + encodeURIComponent(userId) + "/disable", {
+          method: "POST",
+        });
+        if (!response.ok) throw new Error(staffResponseMessage(response.status));
+        $("staffSuccess").textContent = "Acceso desactivado.";
+        await loadStaff();
+      } catch (error) {
+        $("staffError").textContent = error.message || "No se pudo desactivar.";
+      } finally {
+        staffMutationInProgress = false;
+      }
+    }
 
     function statusClass(status) {
       const s = (status || "").toUpperCase();
@@ -389,6 +503,8 @@ const API = ""; // relative API: same backend that serves this frontend
     document.addEventListener("DOMContentLoaded", async () => {
       $("loginForm").addEventListener("submit", login);
       $("btnLogout").addEventListener("click", logout);
+      $("staffForm").addEventListener("submit", addStaff);
+      $("btnRefreshStaff").addEventListener("click", loadStaff);
       $("btnAnalyze").addEventListener("click", analyze);
       $("btnRefresh").addEventListener("click", () => loadAnalyses(false));
       $("btnApply").addEventListener("click", () => loadAnalyses(true));
