@@ -2,7 +2,7 @@ import hashlib
 import io
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
@@ -10,6 +10,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
+from pydantic import BaseModel, Field
+
+from app.auth import Principal, authenticate, current_principal, issue_token, TOKEN_MINUTES
 
 from app.schemas.report import Report
 from app.core.validators import validate_subsidy_application
@@ -53,8 +56,30 @@ def health():
     return {"status": "ok"}
 
 
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=1024)
+    organization: str = Field(min_length=1, max_length=80)
+
+
+@app.post("/auth/login")
+def login(request: LoginRequest):
+    principal = authenticate(request.email, request.password, request.organization)
+    return {
+        "access_token": issue_token(principal),
+        "token_type": "bearer",
+        "expires_in": TOKEN_MINUTES * 60,
+    }
+
+
+@app.get("/auth/me")
+def whoami(principal: Principal = Depends(current_principal)):
+    return {"user_id": principal.user_id, "organization_id": principal.organization_id,
+            "role": principal.role}
+
+
 @app.post("/analyze", response_model=Report)
-def analyze(file: UploadFile = File(...)):
+def analyze(file: UploadFile = File(...), principal: Principal = Depends(current_principal)):
     # FastAPI executes this blocking parser/database work in its worker pool.
     data = file.file.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
@@ -97,7 +122,7 @@ def analyze(file: UploadFile = File(...)):
         "text_sha256": text_sha256,
     }
 
-    new_id = save_analysis(report)
+    new_id = save_analysis(report, principal.organization_id)
 
     # Response al cliente (no hace falta mandar extracted_text entero)
     report_out = dict(report)
@@ -108,16 +133,16 @@ def analyze(file: UploadFile = File(...)):
 
 
 @app.get("/analyses/{analysis_id}")
-def get_analysis(analysis_id: int):
-    row = get_analysis_by_id(analysis_id)
+def get_analysis(analysis_id: int, principal: Principal = Depends(current_principal)):
+    row = get_analysis_by_id(analysis_id, principal.organization_id)
     if not row:
         raise HTTPException(status_code=404, detail="Analysis not found")
     return row
 
 
 @app.get("/analyses/{analysis_id}/export")
-def export_analysis(analysis_id: int):
-    row = get_analysis_export(analysis_id)
+def export_analysis(analysis_id: int, principal: Principal = Depends(current_principal)):
+    row = get_analysis_export(analysis_id, principal.organization_id)
     if not row:
         raise HTTPException(status_code=404, detail="Analysis not found")
 
@@ -138,8 +163,10 @@ def get_analyses(
     min_score: Optional[int] = Query(None, ge=0, le=100, description="Score mínimo (0-100)"),
     status: Optional[str] = Query(None, description="OK / REVISAR / RIESGO"),
     document_type: Optional[str] = Query(None, description="Ej: subsidy_application"),
+    principal: Principal = Depends(current_principal),
 ):
     return list_analyses(
+        organization_id=principal.organization_id,
         limit=limit,
         offset=offset,
         filename=filename,
