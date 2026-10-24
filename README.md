@@ -380,6 +380,44 @@ file check; enforce a **whole-request size limit** at the reverse proxy.
 No real customer documents should be used until these protections and
 privacy controls have been assessed.
 
+## PDF analysis in an isolated subprocess (development)
+
+`POST /analyze` does **not** import or run the third-party PDF parser in
+the web-server process. It passes the verified PDF bytes over stdin to a
+short-lived `python -I app/pdf_worker.py` subprocess. The child parses and
+extracts text, enforces the existing maximum of **50 pages / 200,000 text
+characters**, and returns just page count and extracted text as JSON over
+stdout. The main server computes the SHA-256, applies validation rules,
+and saves the tenant-scoped report as before.
+
+Resource restrictions:
+
+- **15-second elapsed-time limit**: FastAPI terminates the child when
+  `subprocess.run(..., timeout=15)` expires, returning HTTP 422 and
+  never recording a failed analysis. A crashed or memory-exhausted worker
+  also fails without persisting a report.
+- On **Linux/POSIX**, the child applies `RLIMIT_AS` of **768 MiB** and
+  `RLIMIT_CPU` of **8 seconds soft / 9 seconds hard**, before importing
+  `pypdf`; memory dumps are disabled.
+- **Windows** does not provide `resource.setrlimit`. Development on Windows
+  retains the wall-clock timeout, but **does not guarantee a memory or CPU
+  limit**. Production requires Linux with container/cgroup isolation or
+  Windows Job Objects with explicit memory and CPU ceilings.
+- The subprocess receives a minimal allowlisted environment; the
+  JWT secret, database password and any application credentials are
+  deliberately **not forwarded**. The PDF is never written to a temporary
+  file by this worker.
+
+**This is not a complete sandbox.** A process still runs under the same
+OS user as the web server, and no filesystem, syscall or network isolation
+is enforced. A compromised PDF parser could therefore read files accessible
+to that account. Before production with real client data, run the
+processor under a distinct unprivileged identity in a container with
+network disabled, read-only filesystem, syscall restrictions and cgroup
+limits; cap concurrent workers, enforce an HTTP upload-body ceiling
+*before* multipart buffering, and review operational logs, data retention,
+security and GDPR requirements.
+
 ## Security and production status
 
 **Development-only; do not upload real client documents.** The repository
