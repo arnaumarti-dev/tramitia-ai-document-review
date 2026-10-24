@@ -9,6 +9,8 @@ import json
 import os
 from pathlib import Path
 import re
+import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -83,6 +85,51 @@ def _worker_launch(max_pages: int, max_chars: int) -> tuple[list[str], dict[str,
     return command, _minimal_environment()
 
 
+_BROKER_ERRORS = {
+    "invalid": (400, "El documento PDF no es válido o está protegido."),
+    "too_large": (413, "El PDF supera el límite de páginas o de texto."),
+    "failed": (422, "El analizador de PDF no pudo completar la operación."),
+    "unavailable": (503, "El servicio de análisis de PDF no está disponible."),
+}
+
+
+def _read_broker_exact(connection: socket.socket, length: int) -> bytes:
+    data = bytearray()
+    while len(data) < length:
+        chunk = connection.recv(min(65536, length - len(data)))
+        if not chunk:
+            raise ConnectionError("Broker connection was closed")
+        data.extend(chunk)
+    return bytes(data)
+
+
+def _broker_request(data: bytes, max_pages: int, max_chars: int) -> bytes:
+    """Send only validated PDF bytes/limits to a trusted local Unix socket.
+
+    No Docker CLI, Docker socket or arbitrary launch command is used here.
+    """
+    if not hasattr(socket, "AF_UNIX"):
+        raise PdfProcessingError(503, "El broker PDF no es compatible con este sistema.")
+    target = os.getenv("TRAMITIA_BROKER_SOCKET", "/run/tramitia/pdf-broker.sock")
+    if not Path(target).is_absolute():
+        raise PdfProcessingError(503, "Ruta del broker PDF no válida.")
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(MAX_WORKER_SECONDS + 5)
+            connection.connect(target)
+            connection.sendall(struct.pack("!III", len(data), max_pages, max_chars) + data)
+            size = struct.unpack("!I", _read_broker_exact(connection, 4))[0]
+            if size > MAX_WORKER_STDOUT_BYTES or size == 0:
+                raise ValueError("Oversized broker output")
+            return _read_broker_exact(connection, size)
+    except (OSError, ConnectionError, TimeoutError) as exc:
+        raise PdfProcessingError(
+            503, "No se pudo contactar con el servicio aislado de PDF."
+        ) from exc
+    except (ValueError, struct.error) as exc:
+        raise PdfProcessingError(422, "Respuesta del broker PDF no válida.") from exc
+
+
 def _parse_pdf_document_unlocked(
     data: bytes,
     *,
@@ -92,34 +139,44 @@ def _parse_pdf_document_unlocked(
     if not (1 <= max_pages <= 50 and 1 <= max_chars <= 200_000):
         raise ValueError("Invalid worker resource limits")
 
-    command, environment = _worker_launch(max_pages, max_chars)
-    try:
-        completed = subprocess.run(
-            command,
-            input=data,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=MAX_WORKER_SECONDS,
-            env=environment,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise PdfProcessingError(
-            422, "El análisis del PDF superó el tiempo máximo permitido."
-        ) from exc
-    except OSError as exc:
-        raise PdfProcessingError(
-            503, "El servicio de análisis de PDF no está disponible."
-        ) from exc
+    if os.getenv("TRAMITIA_PDF_WORKER_BACKEND", "subprocess") == "broker":
+        response = _broker_request(data, max_pages, max_chars)
+    else:
+        command, environment = _worker_launch(max_pages, max_chars)
+        try:
+            completed = subprocess.run(
+                command,
+                input=data,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=MAX_WORKER_SECONDS,
+                env=environment,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise PdfProcessingError(
+                422, "El análisis del PDF superó el tiempo máximo permitido."
+            ) from exc
+        except OSError as exc:
+            raise PdfProcessingError(
+                503, "El servicio de análisis de PDF no está disponible."
+            ) from exc
 
-    if completed.returncode != 0 or len(completed.stdout) > MAX_WORKER_STDOUT_BYTES:
-        raise PdfProcessingError(
-            422, "No se pudo procesar el PDF dentro de los límites de seguridad."
-        )
+        if completed.returncode != 0 or len(completed.stdout) > MAX_WORKER_STDOUT_BYTES:
+            raise PdfProcessingError(
+                422, "No se pudo procesar el PDF dentro de los límites de seguridad."
+            )
+        response = completed.stdout
     try:
-        result = json.loads(completed.stdout)
+        result = json.loads(response)
         if not isinstance(result, dict):
             raise ValueError("bad worker response")
+        if "broker_error" in result:
+            code = result["broker_error"]
+            if code not in _BROKER_ERRORS:
+                raise ValueError("bad broker error")
+            status, message = _BROKER_ERRORS[code]
+            raise PdfProcessingError(status, message)
         if "error" in result:
             code = result["error"]
             if code not in _MESSAGES:
