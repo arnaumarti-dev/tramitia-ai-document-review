@@ -52,6 +52,15 @@ jobs:
       - name: Run unit and PostgreSQL isolation tests
         run: python -m unittest discover -s tests -v
 
+      - name: Build read-only networkless PDF container image
+        run: docker build -f Dockerfile.pdf-worker -t tramitia-pdf-worker:ci .
+      - name: Verify real PDF container boundaries
+        env:
+          TRAMITIA_PDF_WORKER_BACKEND: container
+          TRAMITIA_PDF_WORKER_IMAGE: tramitia-pdf-worker:ci
+          TRAMITIA_CONTAINER_PDF_TEST: "1"
+        run: python -m unittest discover -s tests -p test_pdf_container.py -v
+
       - name: Install headless Chromium for real browser journey
         run: |
           python -m pip install 'playwright==1.56.0'
@@ -60,6 +69,8 @@ jobs:
         env:
           TRAMITIA_BROWSER_E2E: "1"
           TRAMITIA_BROWSER_BASE_URL: http://127.0.0.1:8000
+          TRAMITIA_PDF_WORKER_BACKEND: container
+          TRAMITIA_PDF_WORKER_IMAGE: tramitia-pdf-worker:ci
         run: |
           set -euo pipefail
           uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level warning > /tmp/tramitia-e2e-uvicorn.log 2>&1 &
