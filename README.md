@@ -6,7 +6,7 @@ TramitIA is a **local MVP** for reviewing administrative PDF documents, focused 
 
 ## Features
 
-- Upload a PDF document from a web dashboard.
+- Upload a PDF document (up to 20 MiB) from a web dashboard.
 - Extract text from PDFs with `pypdf`.
 - Run rule-based validations for subsidy application documents.
 - Generate a risk score (`0-100`) and status (`OK`, `REVISAR`, `RIESGO`).
@@ -187,6 +187,8 @@ Base URL: `http://127.0.0.1:8000`
 - `POST /analyze`
   - Multipart upload (`file`) of a PDF.
   - Returns summarized analysis result.
+  - HTTP 400: empty, unreadable or encrypted PDF; HTTP 413: file exceeds 20 MiB.
+  - Parsing and database work run in a worker thread. The size cap bounds the parser input, not PDF decompression or the multipart upload itself.
 
 - `GET /analyses`
   - Paginated list of analyses.
@@ -234,6 +236,14 @@ Base URL: `http://127.0.0.1:8000`
 }
 ```
 
+## Tests
+
+Run `python -m pip install -r requirements.txt httpx`, then
+`python -m unittest discover -s tests -v`.
+With Node.js 22, run `node --test tests/test_frontend.cjs`.
+GitHub Actions runs both suites. Database writes are mocked; frontend tests
+exercise upload behavior with a simulated DOM, not a real browser.
+
 ## Current Limitations
 
 - Uses **heuristic, rule-based** checks (regex/text signals), not advanced legal NLP.
@@ -249,7 +259,7 @@ Base URL: `http://127.0.0.1:8000`
 - Add OCR support for scanned PDFs.
 - Add configurable rule sets by procedure/document type.
 - Add migration tooling and seed scripts.
-- Add automated tests (unit + integration).
+- Extend automated tests with live PostgreSQL integration coverage.
 - Add user authentication and role-based access.
 - Improve explainability of scoring and findings.
 - Add containerized backend service for one-command local startup.
