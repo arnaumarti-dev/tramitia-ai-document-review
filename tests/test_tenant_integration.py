@@ -10,6 +10,7 @@ from pypdf import PdfWriter
 from app.auth import Principal, hash_password, issue_token
 from app.db import get_conn
 from app.main import app
+from scripts.manage_staff import add_staff, disable_staff, list_staff
 
 
 @unittest.skipUnless(os.getenv("TRAMITIA_TEST_POSTGRES") == "1", "PostgreSQL integration tests disabled")
@@ -140,3 +141,63 @@ class TenantIsolationIntegrationTests(unittest.TestCase):
                     (self.users[0][0], self.organizations[0]),
                 )
             self.conn.commit()
+
+
+    def test_login_rate_limit_blocks_after_five_failures(self):
+        """Throttling is shared via PostgreSQL, not individual app workers."""
+        email = f"unknown-{uuid.uuid4().hex[:10]}@example.invalid"
+        for _ in range(5):
+            response = self.client.post("/auth/login", json={
+                "email": email, "password": "incorrect",
+                "organization": self.slugs[0],
+            })
+            self.assertEqual(response.status_code, 401, response.text)
+        blocked = self.client.post("/auth/login", json={
+            "email": email, "password": "incorrect",
+            "organization": self.slugs[0],
+        })
+        self.assertEqual(blocked.status_code, 429, blocked.text)
+        self.assertEqual(blocked.headers.get("retry-after"), "900")
+
+        # Same email under a different organization has a separate throttle key.
+        other_org = self.client.post("/auth/login", json={
+            "email": email, "password": "incorrect",
+            "organization": self.slugs[1],
+        })
+        self.assertEqual(other_org.status_code, 401, other_org.text)
+
+        # No raw email is stored in the rate-limit ledger.
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM login_attempts WHERE key_hash = %s", (email,))
+            self.assertIsNone(cur.fetchone())
+
+    def test_staff_provisioning_and_immediate_revocation(self):
+        email = f"staff-{uuid.uuid4().hex[:12]}@example.invalid"
+        staff_password = "random-demo-strong-123456"
+        user_id = add_staff(self.slugs[0], email, "employee", staff_password)
+        self.users.append((user_id, email))
+        self.assertTrue(any(row[0] == email and row[1] == "employee" and row[2]
+                            for row in list_staff(self.slugs[0])))
+        with self.assertRaisesRegex(ValueError, "already registered"):
+            add_staff(self.slugs[1], email, "employee", staff_password)
+
+        login = self.client.post("/auth/login", json={
+            "email": email, "password": staff_password, "organization": self.slugs[0]
+        })
+        self.assertEqual(login.status_code, 200, login.text)
+        headers = {"Authorization": "Bearer " + login.json()["access_token"]}
+        self.assertEqual(self.client.get("/analyses", headers=headers).status_code, 200)
+        different_org = self.client.post("/auth/login", json={
+            "email": email, "password": staff_password, "organization": self.slugs[1]
+        })
+        self.assertEqual(different_org.status_code, 401, different_org.text)
+
+        disable_staff(self.slugs[0], email)
+        self.assertEqual(self.client.get("/analyses", headers=headers).status_code, 401)
+        self.assertEqual(self.client.post("/auth/login", json={
+            "email": email, "password": staff_password, "organization": self.slugs[0]
+        }).status_code, 401)
+
+    def test_last_owner_cannot_be_disabled(self):
+        with self.assertRaisesRegex(ValueError, "last active owner"):
+            disable_staff(self.slugs[0], self.users[0][1])
