@@ -101,7 +101,8 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         event_loop_thread = threading.get_ident()
         worker_threads = []
 
-        def save(report):
+        def save(report, organization_id):
+            self.assertEqual(organization_id, 21)
             worker_threads.append(threading.get_ident())
             return 1
 
