@@ -10,6 +10,7 @@ from jwt.exceptions import InvalidTokenError
 from pwdlib import PasswordHash
 
 from app.repository import get_membership_role, get_user_for_login
+from app.login_rate_limit import reject_if_limited, record_failure, clear_failures
 
 ISSUER = "tramitia"
 AUDIENCE = "tramitia-api"
@@ -49,11 +50,15 @@ DUMMY_HASH = hash_password("tramitia-dummy-password-not-for-login")
 
 
 def authenticate(email: str, password: str, organization_slug: str) -> Principal:
-    record = get_user_for_login(email.strip().lower(), organization_slug.strip().lower())
-    if not password_hasher.verify(password, record["password_hash"] if record else DUMMY_HASH):
+    email = email.strip().lower()
+    organization_slug = organization_slug.strip().lower()
+    reject_if_limited(email, organization_slug)
+    record = get_user_for_login(email, organization_slug)
+    valid = password_hasher.verify(password, record["password_hash"] if record else DUMMY_HASH)
+    if not valid or not record:
+        record_failure(email, organization_slug)
         raise _unauthorized()
-    if not record:
-        raise _unauthorized()
+    clear_failures(email, organization_slug)
     return Principal(
         user_id=int(record["user_id"]),
         organization_id=int(record["organization_id"]),
