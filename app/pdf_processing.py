@@ -10,10 +10,14 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 
 MAX_WORKER_SECONDS = 15
 MAX_WORKER_STDOUT_BYTES = 1_500_000
 _WORKER = Path(__file__).with_name("pdf_worker.py")
+# Prevent simultaneous PDF jobs from multiplying the memory budget.
+# This is per web-server process, not a fleet-wide queue.
+_WORKER_SLOT = threading.BoundedSemaphore(1)
 
 
 class PdfProcessingError(Exception):
@@ -38,7 +42,7 @@ def _minimal_environment() -> dict[str, str]:
     return {key: os.environ[key] for key in allow if key in os.environ}
 
 
-def parse_pdf_document(
+def _parse_pdf_document_unlocked(
     data: bytes,
     *,
     max_pages: int = 50,
@@ -93,3 +97,22 @@ def parse_pdf_document(
         raise PdfProcessingError(
             422, "El analizador devolvió una respuesta no válida."
         ) from exc
+
+
+def parse_pdf_document(
+    data: bytes,
+    *,
+    max_pages: int = 50,
+    max_chars: int = 200_000,
+) -> tuple[str, int]:
+    """At most one PDF subprocess per web-server process; fail fast on overload."""
+    if not _WORKER_SLOT.acquire(blocking=False):
+        raise PdfProcessingError(
+            503, "El analizador está ocupado. Vuelve a intentarlo en unos momentos."
+        )
+    try:
+        return _parse_pdf_document_unlocked(
+            data, max_pages=max_pages, max_chars=max_chars
+        )
+    finally:
+        _WORKER_SLOT.release()
