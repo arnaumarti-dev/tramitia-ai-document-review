@@ -275,6 +275,25 @@ Frontend tests use a simulated DOM rather than a browser.
 - Add AI-based requirement extraction from official calls or instructions.
 - Compare user documents against automatically extracted requirements.
 
+## Gestión de equipo desde el panel web (MVP)
+
+El propietario puede acceder a **Equipo de la gestoría** tras iniciar sesión
+para consultar el listado, crear empleados/administradores con una contraseña
+inicial y desactivar cuentas. Los administradores pueden gestionar únicamente
+empleados; los empleados normales no tienen acceso a estas rutas. **Ningún rol
+puede desactivar al propietario** desde este panel.
+
+- `GET /staff`: devuelve como máximo 200 miembros exclusivamente de la gestoría del token.
+- `POST /staff`: correo, rol (`employee`/`admin`) y contraseña inicial de 12–128 caracteres. Solo el propietario puede crear administradores. Devuelve HTTP 409 si el correo ya existe.
+- `POST /staff/{user_id}/disable`: desactiva la membresía sin borrar documentos, revocando el acceso en su siguiente petición. Un identificador de otra gestoría devuelve HTTP 404.
+
+Las operaciones revalidan al actor en una transacción PostgreSQL para impedir
+que una membresía revocada siga administrando. El frontend **no almacena
+contraseñas ni tokens** en almacenamiento persistente. Quien cree una cuenta
+debe entregar las credenciales provisionales por un canal seguro; falta
+implementar invitación, cambio de contraseña y recuperación de cuenta antes de
+un uso real. El panel es una comodidad, nunca el control de permisos.
+
 ## Gestión de empleados (solo operador del servidor)
 
 En esta versión todavía no existe un sistema público de invitaciones: una
