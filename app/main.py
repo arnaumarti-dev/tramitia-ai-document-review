@@ -74,6 +74,7 @@ def login(request: LoginRequest):
         "token_type": "bearer",
         "expires_in": TOKEN_MINUTES * 60,
         "role": principal.role,
+        "user_id": principal.user_id,
     }
 
 
