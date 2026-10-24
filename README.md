@@ -243,6 +243,21 @@ Base URL: `http://127.0.0.1:8000`
 }
 ```
 
+## Prueba completa de uso
+
+Se ha añadido una [guía de prueba local en español](docs/PRUEBA_LOCAL_ES.md)
+para recorrer el flujo propietario → invitación → empleado → análisis de
+PDF ficticio → historial y exportación. Puedes crear el PDF de prueba sin
+datos reales mediante:
+
+```bash
+python -m scripts.generate_demo_pdf --output solicitud-ficticia.pdf
+```
+
+GitHub Actions ejecuta también una prueba de extremo a extremo en **Chromium
+real + FastAPI + PostgreSQL 16** (`tests/browser_journey.py`). El test
+utiliza organizaciones inventadas y una base efímera, no cuentas reales.
+
 ## Tests
 
 Run `python -m pip install -r requirements.txt httpx` and

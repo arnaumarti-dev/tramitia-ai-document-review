@@ -9,7 +9,7 @@ permissions:
 jobs:
   tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       POSTGRES_HOST: localhost
       POSTGRES_PORT: "5432"
@@ -51,3 +51,26 @@ jobs:
         run: alembic upgrade head
       - name: Run unit and PostgreSQL isolation tests
         run: python -m unittest discover -s tests -v
+
+      - name: Install headless Chromium for real browser journey
+        run: |
+          python -m pip install 'playwright==1.56.0'
+          python -m playwright install --with-deps chromium
+      - name: E2E gestoría owner → invitation → employee → PDF → export
+        env:
+          TRAMITIA_BROWSER_E2E: "1"
+          TRAMITIA_BROWSER_BASE_URL: http://127.0.0.1:8000
+        run: |
+          set -euo pipefail
+          uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level warning > /tmp/tramitia-e2e-uvicorn.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 60); do
+            if curl --silent --show-error --fail http://127.0.0.1:8000/health > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --silent --show-error --fail http://127.0.0.1:8000/health
+          python -m unittest discover -s tests -p browser_journey.py -v
+
