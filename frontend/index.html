@@ -20,6 +20,18 @@
       </div>
     </nav>
 
+    <section id="invitePanel" class="panel login-panel" hidden>
+      <h2>Aceptar invitación a TramitIA</h2>
+      <p>Establece tu propia contraseña; el responsable de la gestoría no la conocerá.</p>
+      <form id="inviteAcceptForm" class="login-form">
+        <label for="inviteNewPassword">Nueva contraseña (mínimo 12 caracteres)</label>
+        <input id="inviteNewPassword" type="password" minlength="12" maxlength="128" autocomplete="new-password" required />
+        <label for="inviteConfirmPassword">Confirmar contraseña</label>
+        <input id="inviteConfirmPassword" type="password" minlength="12" maxlength="128" autocomplete="new-password" required />
+        <p id="inviteAcceptError" class="login-error" role="alert"></p>
+        <button id="btnAcceptInvite" class="btn btn-primary" type="submit">Activar cuenta</button>
+      </form>
+    </section>
     <section id="loginPanel" class="panel login-panel">
       <div class="panel-header"><div>
         <h2>Accede a tu gestoría</h2>
@@ -207,12 +219,12 @@
             <option id="staffRoleAdmin" value="admin">Administrador</option>
           </select>
         </label>
-        <label for="staffPassword">Contraseña inicial (mínimo 12 caracteres)
-          <input id="staffPassword" type="password" minlength="12" maxlength="128" required autocomplete="new-password" />
-        </label>
-        <button id="btnAddStaff" class="btn btn-primary" type="submit">Añadir empleado</button>
+        <button id="btnAddStaff" class="btn btn-primary" type="submit">Crear invitación</button>
       </form>
-      <p class="muted">Entrega la contraseña inicial por un canal seguro y pide cambiarla en cuanto exista la función de cambio de contraseña. Este alta manual es provisional.</p>
+      <p class="muted">La invitación caduca en 24 horas. Solo se muestra una vez: envía el enlace por un canal privado al empleado, que establecerá su propia contraseña.</p>
+      <label id="staffInviteLinkPanel" hidden for="staffInviteLink">Enlace privado de invitación
+        <input id="staffInviteLink" type="text" readonly autocomplete="off" />
+      </label>
       <p id="staffError" class="login-error" role="alert"></p>
       <p id="staffSuccess" class="muted" role="status"></p>
       <div class="table-wrap">
@@ -222,6 +234,20 @@
         </table>
       </div>
     </section>
+      <section class="panel password-panel">
+        <h2>Seguridad de mi cuenta</h2>
+        <p>Cambia tu contraseña cuando quieras. Al guardarla, todas tus sesiones quedarán invalidadas.</p>
+        <form id="passwordForm" class="login-form">
+          <label for="currentPassword">Contraseña actual</label>
+          <input id="currentPassword" type="password" autocomplete="current-password" required />
+          <label for="newPassword">Nueva contraseña (mínimo 12 caracteres)</label>
+          <input id="newPassword" type="password" minlength="12" maxlength="128" autocomplete="new-password" required />
+          <label for="newPasswordRepeat">Repite la contraseña</label>
+          <input id="newPasswordRepeat" type="password" minlength="12" maxlength="128" autocomplete="new-password" required />
+          <p id="passwordError" class="login-error" role="alert"></p>
+          <button id="btnChangePassword" class="btn btn-primary" type="submit">Actualizar contraseña</button>
+        </form>
+      </section>
     </div><!-- workspace -->
   </div>
 
