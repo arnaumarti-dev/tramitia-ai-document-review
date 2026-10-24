@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
 from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 
 from app.schemas.report import Report
 from app.core.validators import validate_subsidy_application
@@ -54,11 +55,25 @@ def health():
 @app.post("/analyze", response_model=Report)
 async def analyze(file: UploadFile = File(...)):
     data = await file.read()
-    reader = PdfReader(io.BytesIO(data))
+    if not data:
+        raise HTTPException(status_code=400, detail="El archivo está vacío.")
 
-    text = ""
-    for page in reader.pages:
-        text += (page.extract_text() or "") + "\n"
+    # Solo los errores de lectura del documento son errores del cliente.
+    try:
+        reader = PdfReader(io.BytesIO(data))
+        if reader.is_encrypted:
+            raise HTTPException(
+                status_code=400,
+                detail="El PDF está protegido. Sube una copia sin contraseña.",
+            )
+        text = ""
+        for page in reader.pages:
+            text += (page.extract_text() or "") + "\n"
+    except (PdfReadError, ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="No se puede leer el PDF. Comprueba que sea válido y no esté dañado.",
+        ) from exc
 
     # hash del texto extraído (auditoría)
     text_sha256 = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
