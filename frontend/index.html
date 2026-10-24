@@ -189,6 +189,39 @@
         </div>
       </section>
     </main>
+    <section id="staffPanel" class="panel staff-panel" hidden aria-labelledby="staffTitle">
+      <div class="panel-header">
+        <div>
+          <h2 id="staffTitle">Equipo de la gestoría</h2>
+          <p>Gestiona los accesos sin utilizar la terminal. Solo propietarios y administradores.</p>
+        </div>
+        <button id="btnRefreshStaff" class="btn btn-ghost" type="button">Actualizar equipo</button>
+      </div>
+      <form id="staffForm" class="staff-form">
+        <label for="staffEmail">Correo del nuevo empleado
+          <input id="staffEmail" type="email" maxlength="254" required autocomplete="off" placeholder="persona@gestoria.es" />
+        </label>
+        <label for="staffRole">Permisos
+          <select id="staffRole">
+            <option value="employee">Empleado</option>
+            <option id="staffRoleAdmin" value="admin">Administrador</option>
+          </select>
+        </label>
+        <label for="staffPassword">Contraseña inicial (mínimo 12 caracteres)
+          <input id="staffPassword" type="password" minlength="12" maxlength="128" required autocomplete="new-password" />
+        </label>
+        <button id="btnAddStaff" class="btn btn-primary" type="submit">Añadir empleado</button>
+      </form>
+      <p class="muted">Entrega la contraseña inicial por un canal seguro y pide cambiarla en cuanto exista la función de cambio de contraseña. Este alta manual es provisional.</p>
+      <p id="staffError" class="login-error" role="alert"></p>
+      <p id="staffSuccess" class="muted" role="status"></p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Correo</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead>
+          <tbody id="staffBody"><tr><td colspan="4">Cargando equipo...</td></tr></tbody>
+        </table>
+      </div>
+    </section>
     </div><!-- workspace -->
   </div>
 
