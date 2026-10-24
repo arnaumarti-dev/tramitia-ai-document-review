@@ -59,6 +59,7 @@ class TenantIsolationIntegrationTests(unittest.TestCase):
     def tearDownClass(cls):
         try:
             with cls.conn.cursor() as cur:
+                cur.execute("DELETE FROM staff_invitations WHERE organization_id = ANY(%s)", (cls.organizations,))
                 cur.execute("DELETE FROM analyses WHERE organization_id = ANY(%s)", (cls.organizations,))
                 cur.execute("DELETE FROM memberships WHERE organization_id = ANY(%s)", (cls.organizations,))
                 cur.execute("DELETE FROM users WHERE id = ANY(%s)", ([u[0] for u in cls.users],))
