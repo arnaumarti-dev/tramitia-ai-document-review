@@ -6,13 +6,13 @@ TramitIA is a **local MVP** for reviewing administrative PDF documents, focused 
 
 ## Features
 
-- Upload a PDF document (up to 20 MiB) from a web dashboard.
+- Sign in to a specific organization and upload PDFs (up to 20 MiB) from a web dashboard.
 - Extract text from PDFs with `pypdf`.
 - Run rule-based validations for subsidy application documents.
 - Generate a risk score (`0-100`) and status (`OK`, `REVISAR`, `RIESGO`).
-- Store analysis metadata and findings in PostgreSQL.
+- Store organization-scoped metadata and findings in PostgreSQL (raw extracted text is not stored for new analyses).
 - List and filter past analyses (filename, minimum score, status, document type).
-- View analysis details and download a full JSON export per analysis.
+- View and download only the analyses belonging to the authenticated organization.
 
 ## Tech Stack
 
@@ -22,6 +22,8 @@ TramitIA is a **local MVP** for reviewing administrative PDF documents, focused 
 - **Data validation/models:** Pydantic
 - **Frontend:** HTML, CSS, Vanilla JavaScript
 - **Containerization:** Docker Compose (PostgreSQL service)
+- **Authentication:** short-lived signed JWT bearer token, Argon2id password hashes, current database membership checks
+- **Migrations:** Alembic
 
 ## Architecture
 
@@ -31,7 +33,7 @@ High-level flow:
 2. FastAPI backend reads the file and extracts text with `pypdf`.
 3. Validation rules are applied to the extracted text (IDs, email, phone, signature/date/address/request/declaration signals, etc.).
 4. The app calculates a score and risk status.
-5. Analysis is persisted in PostgreSQL (`analyses` table).
+5. Analysis is persisted in PostgreSQL with a verified organization ID (`analyses` table).
 6. Frontend can fetch:
    - current analysis result,
    - paginated history,
@@ -92,7 +94,8 @@ The backend reads these variables (with defaults shown):
 - `POSTGRES_PORT` (default: `5432`)
 - `POSTGRES_DB` (default: `tramitia`)
 - `POSTGRES_USER` (default: `tramitia`)
-- `POSTGRES_PASSWORD` (default: `tramitia`)
+- `POSTGRES_PASSWORD` (default: `tramitia`, **development only**)
+- `TRAMITIA_JWT_SECRET` (**required**, at least 32 cryptographically random characters; no default)
 
 Example:
 
@@ -102,28 +105,27 @@ export POSTGRES_PORT=5432
 export POSTGRES_DB=tramitia
 export POSTGRES_USER=tramitia
 export POSTGRES_PASSWORD=tramitia
+export TRAMITIA_JWT_SECRET="$(python -c 'import secrets; print(secrets.token_hex(32))')"
 ```
 
-### 4) Create database table
+### 4) Migrate database and create the first owner
 
-Before running the app, create the `analyses` table in PostgreSQL:
+Start PostgreSQL with `docker compose up -d`, then run:
 
-```sql
-CREATE TABLE IF NOT EXISTS analyses (
-    id SERIAL PRIMARY KEY,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    filename TEXT NOT NULL,
-    pages INTEGER,
-    chars INTEGER,
-    document_type TEXT,
-    score INTEGER,
-    status TEXT,
-    summary TEXT,
-    findings_json JSONB,
-    extracted_text TEXT,
-    text_sha256 TEXT
-);
+```bash
+alembic upgrade head
+python -m scripts.bootstrap_admin --slug mi-gestoria --name "Mi Gestoría" --email owner@example.com
 ```
+
+The bootstrap command prompts for a password; never store it in the repository
+or supply it in command arguments. Login via the dashboard with organization
+`mi-gestoria`, the owner email, and your password. Each request verifies that
+the user's membership in the organization is still active.
+
+**Legacy rows:** the migration preserves analyses created before tenant support
+with `organization_id = NULL`. They are inaccessible to every organization
+until an administrator designs and audits a manual ownership reassignment.
+Never bulk-assign historical rows to an arbitrary organization.
 
 ### 5) Run the API
 
@@ -184,6 +186,11 @@ Base URL: `http://127.0.0.1:8000`
 - `GET /health`
   - Health check.
 
+- `POST /auth/login`
+  - JSON body: `{"organization":"mi-gestoria","email":"owner@example.com","password":"..."}`
+  - Returns a short-lived bearer token (30 minutes). No public registration route.
+- `GET /auth/me`
+  - Requires `Authorization: Bearer <token>`. Returns user, organization and role.
 - `POST /analyze`
   - Multipart upload (`file`) of a PDF.
   - Returns summarized analysis result.
@@ -204,7 +211,7 @@ Base URL: `http://127.0.0.1:8000`
   - Detailed analysis by ID (includes findings).
 
 - `GET /analyses/{analysis_id}/export`
-  - Full JSON export for download (includes extracted text and hash).
+  - Full JSON export for download (hash included; new analyses have no retained extracted text).
 
 ## Example Response (`POST /analyze`)
 
@@ -238,19 +245,21 @@ Base URL: `http://127.0.0.1:8000`
 
 ## Tests
 
-Run `python -m pip install -r requirements.txt httpx`, then
-`python -m unittest discover -s tests -v`.
-With Node.js 22, run `node --test tests/test_frontend.cjs`.
-GitHub Actions runs both suites. Database writes are mocked; frontend tests
-exercise upload behavior with a simulated DOM, not a real browser.
+Run `python -m pip install -r requirements.txt httpx` and
+`python -m unittest discover -s tests -v` for isolated unit tests.
+For real PostgreSQL isolation coverage, set `TRAMITIA_TEST_POSTGRES=1`
+with an **ephemeral, migrated test database**. With Node.js 22, run
+`node --test tests/test_frontend.cjs`. GitHub Actions runs both test
+suites, applies migrations, and verifies cross-organization denial against PostgreSQL.
+Frontend tests use a simulated DOM rather than a browser.
 
 ## Current Limitations
 
 - Uses **heuristic, rule-based** checks (regex/text signals), not advanced legal NLP.
 - No OCR pipeline for scanned/image-only PDFs.
-- No authentication, authorization, or multi-tenant support.
+- Initial authentication and organization isolation exist; no self-service onboarding, password reset, rate limiting, or hardened session management.
 - No background queue/job system for large batch workloads.
-- No migration framework included in this repository.
+- Alembic handles schema creation, but deployment migration/backup procedures still require operational review.
 - CORS and setup are tuned for local development.
 - Validation logic is currently tailored to subsidy application patterns and Spanish-language wording.
 
@@ -258,13 +267,24 @@ exercise upload behavior with a simulated DOM, not a real browser.
 
 - Add OCR support for scanned PDFs.
 - Add configurable rule sets by procedure/document type.
-- Add migration tooling and seed scripts.
+- Extend bootstrap into secure organization/member administration and audited onboarding.
 - Extend automated tests with live PostgreSQL integration coverage.
-- Add user authentication and role-based access.
+- Add granular role authorization, invitation flow, account recovery and session revocation.
 - Improve explainability of scoring and findings.
 - Add containerized backend service for one-command local startup.
 - Add AI-based requirement extraction from official calls or instructions.
 - Compare user documents against automatically extracted requirements.
+
+## Security and production status
+
+**Development-only; do not upload real client documents.** The repository
+is public, but credentials, PDFs and extracted data must remain private.
+The dashboard stores JWTs in memory only, requiring login again after refresh.
+Production still needs HTTPS, strict secret rotation, per-user rate limiting,
+account recovery, backup/restore, security monitoring, audit logs, content
+retention/deletion policy, malicious PDF sandboxing, and GDPR review.
+There is no claim of regulatory or legal correctness. All risk scores are
+heuristic and require qualified human review.
 
 ## Disclaimer
 
