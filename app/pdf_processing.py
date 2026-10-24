@@ -13,7 +13,7 @@ import sys
 import threading
 
 MAX_WORKER_SECONDS = 15
-MAX_WORKER_STDOUT_BYTES = 1_500_000
+MAX_WORKER_STDOUT_BYTES = 3_000_000
 _WORKER = Path(__file__).with_name("pdf_worker.py")
 # Prevent simultaneous PDF jobs from multiplying the memory budget.
 # This is per web-server process, not a fleet-wide queue.
