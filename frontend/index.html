@@ -20,6 +20,28 @@
       </div>
     </nav>
 
+    <section id="loginPanel" class="panel login-panel">
+      <div class="panel-header"><div>
+        <h2>Accede a tu gestoría</h2>
+        <p>Inicia sesión para revisar documentos de tu organización.</p>
+      </div></div>
+      <form id="loginForm" class="login-form">
+        <label for="loginOrg">Identificador de la gestoría</label>
+        <input id="loginOrg" type="text" minlength="3" maxlength="80" autocomplete="organization" required placeholder="mi-gestoria" />
+        <label for="loginEmail">Correo electrónico</label>
+        <input id="loginEmail" type="email" maxlength="254" autocomplete="username" required />
+        <label for="loginPassword">Contraseña</label>
+        <input id="loginPassword" type="password" autocomplete="current-password" required />
+        <p class="muted">La sesión caduca automáticamente. No guardamos la contraseña ni el token en el navegador.</p>
+        <p id="loginError" role="alert" class="login-error"></p>
+        <button id="btnLogin" class="btn btn-primary" type="submit">Iniciar sesión</button>
+      </form>
+    </section>
+    <div id="workspace" hidden>
+      <div class="session-bar">
+        <span id="sessionInfo"></span>
+        <button id="btnLogout" class="btn btn-ghost" type="button">Cerrar sesión</button>
+      </div>
     <section class="hero">
       <div class="hero-card">
         <div class="eyebrow">⚡ MVP local · FastAPI + PostgreSQL + Docker</div>
@@ -167,6 +189,7 @@
         </div>
       </section>
     </main>
+    </div><!-- workspace -->
   </div>
 
   <div id="modal" class="modal" aria-hidden="true">
