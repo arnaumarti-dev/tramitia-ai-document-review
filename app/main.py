@@ -1,6 +1,7 @@
 import hashlib
 import io
-from typing import Optional
+import re
+from typing import Optional, Literal
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends
 from fastapi.encoders import jsonable_encoder
@@ -12,7 +13,10 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 from pydantic import BaseModel, Field
 
-from app.auth import Principal, authenticate, current_principal, issue_token, TOKEN_MINUTES
+from app.auth import Principal, authenticate, current_principal, issue_token, hash_password, TOKEN_MINUTES
+from app.staff import (StaffForbidden, StaffConflict, StaffNotFound,
+                       list_staff as staff_list, create_staff as staff_create,
+                       disable_staff as staff_disable)
 
 from app.schemas.report import Report
 from app.core.validators import validate_subsidy_application
@@ -69,6 +73,7 @@ def login(request: LoginRequest):
         "access_token": issue_token(principal),
         "token_type": "bearer",
         "expires_in": TOKEN_MINUTES * 60,
+        "role": principal.role,
     }
 
 
@@ -76,6 +81,64 @@ def login(request: LoginRequest):
 def whoami(principal: Principal = Depends(current_principal)):
     return {"user_id": principal.user_id, "organization_id": principal.organization_id,
             "role": principal.role}
+
+
+def require_staff_manager(principal: Principal = Depends(current_principal)) -> Principal:
+    if principal.role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="No tienes permisos de administración.")
+    return principal
+
+
+class CreateStaffRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+    role: Literal["employee", "admin"] = "employee"
+    password: str = Field(min_length=12, max_length=128)
+
+
+def _staff_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, StaffForbidden):
+        return HTTPException(status_code=403, detail="No tienes permisos para esta operación.")
+    if isinstance(exc, StaffNotFound):
+        return HTTPException(status_code=404, detail="Empleado no encontrado.")
+    return HTTPException(status_code=409, detail="No se puede crear la cuenta indicada.")
+
+
+@app.get("/staff")
+def get_staff(principal: Principal = Depends(require_staff_manager)):
+    try:
+        return {"items": staff_list(principal.organization_id, principal.user_id)}
+    except StaffForbidden as exc:
+        raise _staff_error(exc) from exc
+
+
+@app.post("/staff", status_code=201)
+def add_staff_member(request: CreateStaffRequest,
+                     principal: Principal = Depends(require_staff_manager)):
+    email = request.email.strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise HTTPException(status_code=422, detail="Correo electrónico no válido.")
+    if request.role == "admin" and principal.role != "owner":
+        raise HTTPException(status_code=403, detail="Solo el propietario puede crear administradores.")
+    try:
+        # The service rechecks the actor's role inside the transaction.
+        return staff_create(
+            principal.organization_id, principal.user_id,
+            email, request.role, hash_password(request.password),
+        )
+    except (StaffForbidden, StaffConflict) as exc:
+        raise _staff_error(exc) from exc
+
+
+@app.post("/staff/{user_id}/disable")
+def disable_staff_member(user_id: int,
+                         principal: Principal = Depends(require_staff_manager)):
+    if user_id <= 0:
+        raise HTTPException(status_code=404, detail="Empleado no encontrado.")
+    try:
+        staff_disable(principal.organization_id, principal.user_id, user_id)
+    except (StaffForbidden, StaffNotFound) as exc:
+        raise _staff_error(exc) from exc
+    return {"status": "disabled"}
 
 
 @app.post("/analyze", response_model=Report)
