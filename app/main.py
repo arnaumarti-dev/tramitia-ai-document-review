@@ -197,7 +197,7 @@ def analyze(file: UploadFile = File(...), principal: Principal = Depends(current
 
     # This field is displayed in the UI, not interpreted as a filesystem path.
     # Avoid storing a client-supplied pathname or an excessively long filename.
-    safe_filename = (file.filename or "").replace("\\\\", "/").rsplit("/", 1)[-1].strip()
+    safe_filename = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
     if not safe_filename or len(safe_filename) > 200:
         raise HTTPException(
             status_code=400,
