@@ -88,6 +88,74 @@ class UploadTests(unittest.TestCase):
             reader.assert_not_called()
             save.assert_not_called()
 
+    def test_reject_non_pdf_signature_before_parser(self):
+        # The client-provided filename and MIME must never prove a file is a PDF.
+        with patch("app.main.save_analysis") as save, patch("app.main.PdfReader") as reader:
+            response = self.client.post(
+                "/analyze",
+                files={"file": ("fake.pdf", b"not a real PDF", "application/pdf")},
+            )
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertIn("cabecera PDF", response.json()["detail"])
+        reader.assert_not_called()
+        save.assert_not_called()
+
+    def test_zero_page_pdf_is_not_saved(self):
+        out = io.BytesIO()
+        PdfWriter().write(out)
+        with patch("app.main.save_analysis") as save:
+            response = self.client.post(
+                "/analyze",
+                files={"file": ("empty.pdf", out.getvalue(), "application/pdf")},
+            )
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertIn("no contiene páginas", response.json()["detail"])
+        save.assert_not_called()
+
+    def test_page_ceiling_rejects_before_text_extraction(self):
+        writer = PdfWriter()
+        writer.add_blank_page(width=300, height=300)
+        writer.add_blank_page(width=300, height=300)
+        out = io.BytesIO()
+        writer.write(out)
+        with patch("app.main.MAX_PDF_PAGES", 1), patch("app.main.save_analysis") as save:
+            response = self.client.post(
+                "/analyze",
+                files={"file": ("too-many.pdf", out.getvalue(), "application/pdf")},
+            )
+        self.assertEqual(response.status_code, 413, response.text)
+        self.assertIn("1 páginas", response.json()["detail"])
+        save.assert_not_called()
+
+    def test_extracted_text_ceiling_rejects_without_saving(self):
+        with patch("app.main.MAX_EXTRACTED_TEXT_CHARS", 10), patch("app.main.save_analysis") as save:
+            response = self.client.post(
+                "/analyze",
+                files={"file": ("much-text.pdf", make_pdf(), "application/pdf")},
+            )
+        self.assertEqual(response.status_code, 413, response.text)
+        self.assertIn("10 caracteres", response.json()["detail"])
+        save.assert_not_called()
+
+    def test_filename_is_stored_as_basename_not_local_path(self):
+        with patch("app.main.save_analysis", return_value=42) as save:
+            response = self.client.post(
+                "/analyze",
+                files={"file": (r"C:\\users\\owner\\financial.pdf", make_pdf(), "application/pdf")},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(save.call_args.args[0]["filename"], "financial.pdf")
+
+    def test_filename_ceiling_rejects_without_saving(self):
+        with patch("app.main.save_analysis") as save:
+            response = self.client.post(
+                "/analyze",
+                files={"file": ("x" * 210 + ".pdf", make_pdf(), "application/pdf")},
+            )
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertIn("nombre del archivo", response.json()["detail"])
+        save.assert_not_called()
+
     def test_database_errors_remain_server_errors(self):
         with patch("app.main.save_analysis", side_effect=RuntimeError("database unavailable")):
             response = self.client.post(
