@@ -407,6 +407,10 @@ Resource restrictions:
   JWT secret, database password and any application credentials are
   deliberately **not forwarded**. The PDF is never written to a temporary
   file by this worker.
+- A non-blocking semaphore permits at most **one active PDF subprocess per
+  FastAPI process**. Further concurrent uploads get HTTP 503 rather than
+  launching multiple high-memory parsers. Multiple web-server processes or
+  replicas require their own global concurrency controls and queue.
 
 **This is not a complete sandbox.** A process still runs under the same
 OS user as the web server, and no filesystem, syscall or network isolation
