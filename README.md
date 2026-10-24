@@ -6,7 +6,7 @@ TramitIA is a **local MVP** for reviewing administrative PDF documents, focused 
 
 ## Features
 
-- Sign in to a specific organization and upload PDFs (up to 20 MiB) from a web dashboard.
+- Sign in to a specific organization and upload PDFs (up to 20 MiB, 50 pages, and 200,000 extracted text characters) from a web dashboard.
 - Extract text from PDFs with `pypdf`.
 - Run rule-based validations for subsidy application documents.
 - Generate a risk score (`0-100`) and status (`OK`, `REVISAR`, `RIESGO`).
@@ -358,6 +358,27 @@ contador compartido se guarda en PostgreSQL mediante un HMAC del identificador,
 no con los correos en texto plano. Sigue haciendo falta protección perimetral
 por IP, supervisión, recuperación de cuentas y mitigación del bloqueo
 malicioso de cuentas para un despliegue real.
+
+## PDF resource guardrails (development)
+
+The `/analyze` route rejects files exceeding **20 MiB**, with no `%PDF-`
+header, without pages, with more than **50 pages**, or with more than
+**200,000 extracted characters**. Requests exceeding the size, page, or
+text limits receive HTTP 413; malformed documents receive HTTP 400.
+These rejected documents are **not stored** in the analysis history.
+Client-supplied filenames are reduced to a safe basename of at most
+200 characters; MIME headers alone are not accepted as proof of a PDF.
+Normal short PDFs still receive the same heuristic analysis.
+
+**These checks do not bound the CPU or memory used by `pypdf` while it
+opens a hostile PDF or extracts an individual page.** They are preliminary
+input restrictions, not a security sandbox. Before any production rollout,
+perform PDF analysis in an isolated, resource-capped worker with CPU,
+memory, process time and decompression limits, plus malware policies.
+The multipart request may also be buffered before the endpoint's 20 MiB
+file check; enforce a **whole-request size limit** at the reverse proxy.
+No real customer documents should be used until these protections and
+privacy controls have been assessed.
 
 ## Security and production status
 

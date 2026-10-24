@@ -33,6 +33,8 @@ app = FastAPI(title="TramitIA MVP")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+MAX_PDF_PAGES = 50
+MAX_EXTRACTED_TEXT_CHARS = 200_000
 
 app.mount("/frontend", StaticFiles(directory=FRONTEND_DIR), name="frontend")
 
@@ -185,7 +187,26 @@ def analyze(file: UploadFile = File(...), principal: Principal = Depends(current
     if not data:
         raise HTTPException(status_code=400, detail="El archivo está vacío.")
 
-    # Solo los errores de lectura del documento son errores del cliente.
+    # Check the file signature rather than trusting the submitted MIME type.
+    # Reject non-PDF payloads before invoking the third-party parser.
+    if not data.startswith(b"%PDF-"):
+        raise HTTPException(
+            status_code=400,
+            detail="El archivo no tiene una cabecera PDF válida.",
+        )
+
+    # This field is displayed in the UI, not interpreted as a filesystem path.
+    # Avoid storing a client-supplied pathname or an excessively long filename.
+    safe_filename = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    if not safe_filename or len(safe_filename) > 200:
+        raise HTTPException(
+            status_code=400,
+            detail="El nombre del archivo PDF no es válido.",
+        )
+
+    # These limits bound accepted document complexity and saved metadata.
+    # They do NOT make pypdf a sandbox: hostile input can still exhaust CPU or
+    # memory DURING individual page parsing before a post-extraction check.
     try:
         reader = PdfReader(io.BytesIO(data))
         if reader.is_encrypted:
@@ -193,10 +214,28 @@ def analyze(file: UploadFile = File(...), principal: Principal = Depends(current
                 status_code=400,
                 detail="El PDF está protegido. Sube una copia sin contraseña.",
             )
-        text = ""
+        page_count = len(reader.pages)
+        if page_count == 0:
+            raise HTTPException(status_code=400, detail="El PDF no contiene páginas.")
+        if page_count > MAX_PDF_PAGES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"El PDF supera el límite de {MAX_PDF_PAGES} páginas.",
+            )
+
+        chunks = []
+        chars = 0
         for page in reader.pages:
-            text += (page.extract_text() or "") + "\n"
-    except (PdfReadError, ValueError, KeyError, TypeError) as exc:
+            chunk = (page.extract_text() or "") + "\n"
+            chars += len(chunk)
+            if chars > MAX_EXTRACTED_TEXT_CHARS:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"El PDF supera el límite de {MAX_EXTRACTED_TEXT_CHARS:,} caracteres de texto.",
+                )
+            chunks.append(chunk)
+        text = "".join(chunks)
+    except (PdfReadError, ValueError, KeyError, TypeError, RecursionError, OverflowError) as exc:
         raise HTTPException(
             status_code=400,
             detail="No se puede leer el PDF. Comprueba que sea válido y no esté dañado.",
@@ -208,8 +247,8 @@ def analyze(file: UploadFile = File(...), principal: Principal = Depends(current
     findings, score, status, summary = validate_subsidy_application(text)
 
     report = {
-        "filename": file.filename,
-        "pages": len(reader.pages),
+        "filename": safe_filename,
+        "pages": page_count,
         "chars": len(text),
         "document_type": "subsidy_application",
         "score": score,
