@@ -1,4 +1,5 @@
 import io
+import os
 import unittest
 import threading
 
@@ -9,7 +10,12 @@ from fastapi.testclient import TestClient
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
+# Unit tests use a non-production secret and mock membership/database access.
+os.environ.setdefault("TRAMITIA_JWT_SECRET", "only-for-tests-never-use-this-value-in-production-123")
+from app.auth import Principal, issue_token
 from app.main import app
+
+AUTH_HEADERS = {"Authorization": "Bearer " + issue_token(Principal(11, 21, "owner"))}
 from app.core.validators import validate_basic
 
 
@@ -37,6 +43,10 @@ def make_pdf(encrypted=False):
 class UploadTests(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app, raise_server_exceptions=False)
+        self.client.headers.update(AUTH_HEADERS)
+        member = patch("app.auth.get_membership_role", return_value="owner")
+        member.start()
+        self.addCleanup(member.stop)
 
     def test_invalid_uploads_return_400_without_saving(self):
         for data in (b"", b"not a PDF", b"%PDF-1.7\ntruncated", make_pdf(True)):
@@ -95,8 +105,8 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
             worker_threads.append(threading.get_ident())
             return 1
 
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-            with patch("app.main.save_analysis", side_effect=save):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", headers=AUTH_HEADERS) as client:
+            with patch("app.auth.get_membership_role", return_value="owner"), patch("app.main.save_analysis", side_effect=save):
                 response = await client.post(
                     "/analyze", files={"file": ("ok.pdf", make_pdf(), "application/pdf")}
                 )
@@ -128,3 +138,50 @@ class PhoneTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AuthorizationTests(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app, raise_server_exceptions=False)
+
+    def test_anonymous_requests_are_rejected(self):
+        for method, path in (
+            ("post", "/analyze"), ("get", "/analyses"),
+            ("get", "/analyses/1"), ("get", "/analyses/1/export"),
+            ("get", "/auth/me"),
+        ):
+            with self.subTest(path=path), patch("app.main.save_analysis") as save:
+                response = getattr(self.client, method)(path)
+                self.assertEqual(response.status_code, 401, response.text)
+                save.assert_not_called()
+
+    def test_invalid_token_is_rejected(self):
+        response = self.client.get("/analyses", headers={"Authorization": "Bearer tampered"})
+        self.assertEqual(response.status_code, 401)
+
+    def test_revoked_membership_is_rejected(self):
+        with patch("app.auth.get_membership_role", return_value=None):
+            response = self.client.get("/analyses", headers=AUTH_HEADERS)
+        self.assertEqual(response.status_code, 401)
+
+    def test_tenant_id_is_taken_from_principal_for_all_routes(self):
+        with patch("app.auth.get_membership_role", return_value="employee"):
+            with patch("app.main.list_analyses", return_value={"total": 0, "items": [], "limit": 20, "offset": 0}) as listing:
+                response = self.client.get("/analyses", headers=AUTH_HEADERS)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(listing.call_args.kwargs["organization_id"], 21)
+
+            with patch("app.main.get_analysis_by_id", return_value=None) as detail:
+                response = self.client.get("/analyses/999", headers=AUTH_HEADERS)
+                self.assertEqual(response.status_code, 404)
+                detail.assert_called_once_with(999, 21)
+
+            with patch("app.main.get_analysis_export", return_value=None) as export:
+                response = self.client.get("/analyses/999/export", headers=AUTH_HEADERS)
+                self.assertEqual(response.status_code, 404)
+                export.assert_called_once_with(999, 21)
+
+    def test_wrong_secret_rejects_token(self):
+        with patch.dict(os.environ, {"TRAMITIA_JWT_SECRET": "another-valid-secret-with-more-than-32-chars"}):
+            response = self.client.get("/analyses", headers=AUTH_HEADERS)
+        self.assertEqual(response.status_code, 401)
