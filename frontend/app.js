@@ -3,8 +3,269 @@ const API = ""; // relative API: same backend that serves this frontend
     let offset = 0;
     let total = 0;
     let analysisInProgress = false;
+    // Tokens live only in memory; do not persist them in localStorage.
+    let authToken = null;
+    let currentUserId = null;
+    let currentRole = null;
+    let staffMutationInProgress = false;
+    let pendingInviteToken = null;
+
+    function logout() {
+      authToken = null;
+      currentUserId = null;
+      currentRole = null;
+      $("staffPanel").hidden = true;
+      $("staffBody").innerHTML = "";
+      $("staffInviteLink").value = "";
+      $("staffInviteLinkPanel").hidden = true;
+      $("currentPassword").value = "";
+      $("newPassword").value = "";
+      $("newPasswordRepeat").value = "";
+      $("staffError").textContent = "";
+      $("staffSuccess").textContent = "";
+      $("workspace").hidden = true;
+      $("loginPanel").hidden = false;
+      $("loginPassword").value = "";
+      $("historyBody").innerHTML = "";
+      $("analysisCard").innerHTML = "";
+      $("sessionInfo").textContent = "";
+      closeModal();
+    }
+
+    async function apiFetch(path, options = {}) {
+      if (!authToken) throw new Error("Inicia sesión para continuar.");
+      const res = await fetch(API + path, {
+        ...options,
+        headers: { ...(options.headers || {}), Authorization: "Bearer " + authToken }
+      });
+      if (res.status === 401) {
+        logout();
+        throw new Error("La sesión ha caducado. Vuelve a iniciar sesión.");
+      }
+      return res;
+    }
+
+    async function login(event) {
+      event.preventDefault();
+      const btn = $("btnLogin");
+      btn.disabled = true;
+      $("loginError").textContent = "";
+      try {
+        const response = await fetch(API + "/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            organization: $("loginOrg").value.trim(),
+            email: $("loginEmail").value.trim(),
+            password: $("loginPassword").value,
+          })
+        });
+        if (response.status === 429) {
+          throw new Error("Demasiados intentos de acceso. Vuelve a probar en 15 minutos.");
+        }
+        if (!response.ok) throw new Error("No se pudo iniciar sesión. Comprueba tus credenciales.");
+        const data = await response.json();
+        if (!data.access_token) throw new Error("El servidor no devolvió una sesión válida.");
+        authToken = data.access_token;
+        currentUserId = data.user_id ?? null;
+        currentRole = data.role ?? null;
+        $("loginPassword").value = "";
+        $("loginPanel").hidden = true;
+        $("workspace").hidden = false;
+        $("sessionInfo").textContent = "Gestoría: " + $("loginOrg").value.trim();
+        const mayManage = currentRole === "owner" || currentRole === "admin";
+        $("staffPanel").hidden = !mayManage;
+        $("staffRoleAdmin").hidden = currentRole !== "owner";
+        if (currentRole !== "owner") $("staffRole").value = "employee";
+        await loadAnalyses(true);
+        if (mayManage) await loadStaff();
+      } catch (error) {
+        $("loginError").textContent = error.message || "No se pudo iniciar sesión.";
+      } finally {
+        btn.disabled = false;
+      }
+    }
 
     const $ = (id) => document.getElementById(id);
+
+
+    function clearStaffNotices() {
+      $("staffError").textContent = "";
+      $("staffSuccess").textContent = "";
+    }
+
+    function staffResponseMessage(status) {
+      if (status === 403) return "No tienes permisos para gestionar esta cuenta.";
+      if (status === 404) return "Ese empleado no pertenece a esta gestoría.";
+      if (status === 409) return "No se puede crear la cuenta. Comprueba que el correo no esté registrado.";
+      if (status === 422) return "Comprueba el correo, la contraseña y el rol elegido.";
+      if (status >= 500) return "El servidor no ha podido completar la operación.";
+      return "No se pudo completar la operación (HTTP " + status + ").";
+    }
+
+    async function loadStaff() {
+      if (currentRole !== "owner" && currentRole !== "admin") return;
+      const requestToken = authToken;
+      try {
+        const response = await apiFetch("/staff");
+        if (!response.ok) throw new Error(staffResponseMessage(response.status));
+        const data = await response.json();
+        // Prevent a late response from repopulating the DOM after logout.
+        if (!authToken || authToken !== requestToken) return;
+        const items = Array.isArray(data.items) ? data.items : [];
+        $("staffBody").innerHTML = items.length ? items.map((person) => {
+          const canDisable = person.is_active
+            && Number(person.user_id) !== Number(currentUserId)
+            && person.role !== "owner"
+            && (currentRole === "owner" || person.role === "employee");
+          return `<tr>
+            <td>${escapeHtml(person.email)}</td>
+            <td>${escapeHtml(person.role)}</td>
+            <td>${person.is_active ? "Activo" : "Desactivado"}</td>
+            <td>${canDisable
+              ? `<button type="button" class="btn btn-ghost" data-disable-id="${escapeHtml(person.user_id)}">Desactivar</button>`
+              : "—"}</td>
+          </tr>`;
+        }).join("") : '<tr><td colspan="4">No hay empleados.</td></tr>';
+        document.querySelectorAll("#staffBody button[data-disable-id]").forEach((button) => {
+          button.addEventListener("click", () => disableStaff(button.dataset.disableId));
+        });
+      } catch (error) {
+        if (authToken === requestToken) {
+          $("staffError").textContent = error.message || "No se pudo cargar el equipo.";
+        }
+      }
+    }
+
+    async function addStaff(event) {
+      event.preventDefault();
+      if (staffMutationInProgress || !authToken) return;
+      clearStaffNotices();
+      staffMutationInProgress = true;
+      $("btnAddStaff").disabled = true;
+      try {
+        const response = await apiFetch("/staff/invitations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: $("staffEmail").value.trim(),
+            role: $("staffRole").value,
+          }),
+        });
+        if (!response.ok) throw new Error(staffResponseMessage(response.status));
+        const result = await response.json();
+        const slug = $("loginOrg").value.trim();
+        const link = window.location.origin + "/#invite=" +
+          encodeURIComponent(result.invite_token) + "&org=" + encodeURIComponent(slug);
+        $("staffInviteLink").value = link;
+        $("staffInviteLinkPanel").hidden = false;
+        $("staffEmail").value = "";
+        $("staffSuccess").textContent = "Invitación creada. Envía el enlace de forma privada; caduca en 24 horas.";
+      } catch (error) {
+        $("staffError").textContent = error.message || "No se pudo añadir el empleado.";
+      } finally {
+        staffMutationInProgress = false;
+        $("btnAddStaff").disabled = false;
+      }
+    }
+
+    async function disableStaff(userId) {
+      if (staffMutationInProgress || !authToken) return;
+      if (!confirm("¿Desactivar el acceso de este empleado?")) return;
+      clearStaffNotices();
+      staffMutationInProgress = true;
+      try {
+        const response = await apiFetch("/staff/" + encodeURIComponent(userId) + "/disable", {
+          method: "POST",
+        });
+        if (!response.ok) throw new Error(staffResponseMessage(response.status));
+        $("staffSuccess").textContent = "Acceso desactivado.";
+        await loadStaff();
+      } catch (error) {
+        $("staffError").textContent = error.message || "No se pudo desactivar.";
+      } finally {
+        staffMutationInProgress = false;
+      }
+    }
+
+    function initializeInvite() {
+      const fragment = window.location.hash || "";
+      if (!fragment.startsWith("#invite=")) return;
+      const params = new URLSearchParams(fragment.slice(1));
+      const token = params.get("invite") || "";
+      if (token.length < 20 || token.length > 200) return;
+      pendingInviteToken = token;
+      $("invitePanel").hidden = false;
+      $("loginPanel").hidden = true;
+      const org = params.get("org");
+      if (org) $("loginOrg").value = org;
+      // Avoid leaving the secret in browser history or accidental screenshots of URLs.
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState(null, "", window.location.pathname || "/");
+      }
+    }
+
+    async function acceptInvite(event) {
+      event.preventDefault();
+      if (!pendingInviteToken) return;
+      $("inviteAcceptError").textContent = "";
+      if ($("inviteNewPassword").value !== $("inviteConfirmPassword").value) {
+        $("inviteAcceptError").textContent = "Las contraseñas no coinciden.";
+        return;
+      }
+      const btn = $("btnAcceptInvite");
+      btn.disabled = true;
+      try {
+        const response = await fetch(API + "/auth/invitations/accept", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            token: pendingInviteToken,
+            password: $("inviteNewPassword").value,
+          }),
+        });
+        if (!response.ok) throw new Error("Invitación inválida, caducada o ya utilizada.");
+        pendingInviteToken = null;
+        $("inviteNewPassword").value = "";
+        $("inviteConfirmPassword").value = "";
+        $("invitePanel").hidden = true;
+        $("loginPanel").hidden = false;
+        $("loginError").textContent = "Cuenta activada. Accede con tu correo y nueva contraseña.";
+      } catch (error) {
+        $("inviteAcceptError").textContent = error.message || "No se pudo aceptar la invitación.";
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function updatePassword(event) {
+      event.preventDefault();
+      $("passwordError").textContent = "";
+      if ($("newPassword").value !== $("newPasswordRepeat").value) {
+        $("passwordError").textContent = "Las nuevas contraseñas no coinciden.";
+        return;
+      }
+      const btn = $("btnChangePassword");
+      btn.disabled = true;
+      try {
+        const response = await apiFetch("/auth/password", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            current_password: $("currentPassword").value,
+            new_password: $("newPassword").value,
+          }),
+        });
+        if (!response.ok) {
+          if (response.status === 400) throw new Error("Contraseña actual incorrecta o repetida.");
+          throw new Error("No se pudo actualizar la contraseña.");
+        }
+        logout();
+        $("loginError").textContent = "Contraseña cambiada. Inicia sesión de nuevo.";
+      } catch (error) {
+        $("passwordError").textContent = error.message || "Error al cambiar la contraseña.";
+      } finally {
+        btn.disabled = false;
+      }
+    }
 
     function statusClass(status) {
       const s = (status || "").toUpperCase();
@@ -15,7 +276,7 @@ const API = ""; // relative API: same backend that serves this frontend
 
     function statusBadge(status) {
       const cls = statusClass(status);
-      return `<span class="badge ${cls}"><span class="dot"></span>${status || "-"}</span>`;
+      return `<span class="badge ${cls}"><span class="dot"></span>${escapeHtml(status || "-")}</span>`;
     }
 
     function severityClass(severity) {
@@ -164,7 +425,7 @@ const API = ""; // relative API: same backend that serves this frontend
         const form = new FormData();
         form.append("file", fileInput.files[0]);
 
-        const res = await fetch(API + "/analyze", { method: "POST", body: form });
+        const res = await apiFetch("/analyze", { method: "POST", body: form });
         if (!res.ok) {
           throw new Error(await uploadErrorMessage(res));
         }
@@ -189,7 +450,7 @@ const API = ""; // relative API: same backend that serves this frontend
       if (resetOffset) offset = 0;
 
       try {
-        const res = await fetch(API + "/analyses?" + buildQuery());
+        const res = await apiFetch("/analyses?" + buildQuery());
         if (!res.ok) {
           const errorText = await res.text();
           throw new Error(`HTTP ${res.status}: ${errorText}`);
@@ -208,12 +469,18 @@ const API = ""; // relative API: same backend that serves this frontend
                 <td>${statusBadge(a.status)}</td>
                 <td class="right"><strong>${escapeHtml(a.score ?? "")}</strong></td>
                 <td class="right">
-                  <a class="export-link" href="${API}/analyses/${encodeURIComponent(a.id)}/export" target="_blank" onclick="event.stopPropagation()">JSON</a>
+                  <button class="export-link" type="button" data-export-id="${escapeHtml(a.id)}">JSON</button>
                 </td>
               </tr>
             `).join("")
           : `<tr><td colspan="6" class="muted">No hay resultados.</td></tr>`;
 
+        document.querySelectorAll("#historyBody button[data-export-id]").forEach((button) => {
+          button.addEventListener("click", (event) => {
+            event.stopPropagation();
+            downloadExport(button.dataset.exportId);
+          });
+        });
         document.querySelectorAll("#historyBody tr[data-id]").forEach((row) => {
           row.addEventListener("click", () => openDetail(row.dataset.id));
         });
@@ -237,7 +504,7 @@ const API = ""; // relative API: same backend that serves this frontend
 
     async function openDetail(id) {
       try {
-        const res = await fetch(API + "/analyses/" + encodeURIComponent(id));
+        const res = await apiFetch("/analyses/" + encodeURIComponent(id));
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         const score = clampScore(data.score);
@@ -257,7 +524,7 @@ const API = ""; // relative API: same backend that serves this frontend
                   <span class="kv">Tipo: ${escapeHtml(data.document_type || "-")}</span>
                 </div>
               </div>
-              <a class="export-link" href="${API}/analyses/${encodeURIComponent(data.id)}/export" target="_blank">Exportar JSON</a>
+              <button class="export-link" type="button" data-export-id="${escapeHtml(data.id)}">Exportar JSON</button>
             </div>
 
             <div class="progress"><div style="width:${score}%; background:${color}"></div></div>
@@ -275,10 +542,35 @@ const API = ""; // relative API: same backend that serves this frontend
             </ul>` : `<div class="empty-state"><strong>Sin hallazgos</strong>No se han detectado incidencias relevantes.</div>`}
           </div>
         `;
+        const exportButton = $("modalContent").querySelector("[data-export-id]");
+        if (exportButton) {
+          exportButton.addEventListener("click", () => downloadExport(exportButton.dataset.exportId));
+        }
         $("modal").classList.add("open");
         $("modal").setAttribute("aria-hidden", "false");
       } catch (error) {
         alert("No se pudo abrir el análisis.");
+      }
+    }
+
+    async function downloadExport(id) {
+      try {
+        const response = await apiFetch("/analyses/" + encodeURIComponent(id) + "/export");
+        if (!response.ok) throw new Error("No se pudo exportar este análisis.");
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        try {
+          const link = document.createElement("a");
+          link.href = objectUrl;
+          link.download = "analysis_" + id + ".json";
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+        } finally {
+          URL.revokeObjectURL(objectUrl);
+        }
+      } catch (error) {
+        alert(error.message || "No se pudo descargar el informe.");
       }
     }
 
@@ -296,6 +588,12 @@ const API = ""; // relative API: same backend that serves this frontend
     }
 
     document.addEventListener("DOMContentLoaded", async () => {
+      $("loginForm").addEventListener("submit", login);
+      $("btnLogout").addEventListener("click", logout);
+      $("staffForm").addEventListener("submit", addStaff);
+      $("inviteAcceptForm").addEventListener("submit", acceptInvite);
+      $("passwordForm").addEventListener("submit", updatePassword);
+      $("btnRefreshStaff").addEventListener("click", loadStaff);
       $("btnAnalyze").addEventListener("click", analyze);
       $("btnRefresh").addEventListener("click", () => loadAnalyses(false));
       $("btnApply").addEventListener("click", () => loadAnalyses(true));
@@ -339,7 +637,7 @@ const API = ""; // relative API: same backend that serves this frontend
         $("selectedFile").textContent = file.name;
       });
 
+      initializeInvite();
       await checkHealth();
-      await loadAnalyses(true);
       setInterval(checkHealth, 10000);
     });

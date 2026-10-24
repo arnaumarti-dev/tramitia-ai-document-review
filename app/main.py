@@ -1,8 +1,9 @@
 import hashlib
 import io
-from typing import Optional
+import re
+from typing import Optional, Literal
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
@@ -10,6 +11,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
+from pydantic import BaseModel, Field
+
+from app.auth import Principal, authenticate, current_principal, issue_token, TOKEN_MINUTES
+from app.staff import (StaffForbidden, StaffConflict, StaffNotFound,
+                       list_staff as staff_list, disable_staff as staff_disable)
+from app.invitations import create_invitation, accept_invitation, InvalidInvitation
+from app.passwords import change_password, InvalidPassword
 
 from app.schemas.report import Report
 from app.core.validators import validate_subsidy_application
@@ -53,8 +61,123 @@ def health():
     return {"status": "ok"}
 
 
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=1024)
+    organization: str = Field(min_length=1, max_length=80)
+
+
+@app.post("/auth/login")
+def login(request: LoginRequest):
+    principal = authenticate(request.email, request.password, request.organization)
+    return {
+        "access_token": issue_token(principal),
+        "token_type": "bearer",
+        "expires_in": TOKEN_MINUTES * 60,
+        "role": principal.role,
+        "user_id": principal.user_id,
+    }
+
+
+@app.get("/auth/me")
+def whoami(principal: Principal = Depends(current_principal)):
+    return {"user_id": principal.user_id, "organization_id": principal.organization_id,
+            "role": principal.role}
+
+
+def require_staff_manager(principal: Principal = Depends(current_principal)) -> Principal:
+    if principal.role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="No tienes permisos de administración.")
+    return principal
+
+
+class InviteStaffRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+    role: Literal["employee", "admin"] = "employee"
+
+
+class AcceptInvitationRequest(BaseModel):
+    token: str = Field(min_length=20, max_length=200)
+    password: str = Field(min_length=12, max_length=128)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=1024)
+    new_password: str = Field(min_length=12, max_length=128)
+
+
+@app.post("/auth/invitations/accept")
+def accept_staff_invitation(request: AcceptInvitationRequest):
+    try:
+        accept_invitation(request.token, request.password)
+    except InvalidInvitation as exc:
+        raise HTTPException(
+            status_code=400, detail="Invitación inválida, caducada o ya utilizada."
+        ) from exc
+    return {"status": "accepted"}
+
+
+@app.post("/auth/password")
+def update_own_password(request: ChangePasswordRequest,
+                        principal: Principal = Depends(current_principal)):
+    try:
+        change_password(principal.user_id, principal.organization_id,
+                        principal.session_version, request.current_password,
+                        request.new_password)
+    except InvalidPassword as exc:
+        raise HTTPException(
+            status_code=400, detail="Contraseña actual incorrecta o no se puede reutilizar."
+        ) from exc
+    return {"status": "updated", "reauthentication_required": True}
+
+
+def _staff_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, StaffForbidden):
+        return HTTPException(status_code=403, detail="No tienes permisos para esta operación.")
+    if isinstance(exc, StaffNotFound):
+        return HTTPException(status_code=404, detail="Empleado no encontrado.")
+    return HTTPException(status_code=409, detail="No se puede crear la cuenta indicada.")
+
+
+@app.get("/staff")
+def get_staff(principal: Principal = Depends(require_staff_manager)):
+    try:
+        return {"items": staff_list(principal.organization_id, principal.user_id)}
+    except StaffForbidden as exc:
+        raise _staff_error(exc) from exc
+
+
+@app.post("/staff/invitations", status_code=201)
+def invite_staff_member(request: InviteStaffRequest,
+                        principal: Principal = Depends(require_staff_manager)):
+    email = request.email.strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise HTTPException(status_code=422, detail="Correo electrónico no válido.")
+    if request.role == "admin" and principal.role != "owner":
+        raise HTTPException(status_code=403, detail="Solo el propietario puede invitar administradores.")
+    try:
+        token = create_invitation(principal.organization_id, principal.user_id,
+                                  email, request.role)
+    except (StaffForbidden, StaffConflict) as exc:
+        raise _staff_error(exc) from exc
+    # Token is disclosed once to the manager; store only its digest server-side.
+    return {"invite_token": token, "expires_in": 24 * 60 * 60}
+
+
+@app.post("/staff/{user_id}/disable")
+def disable_staff_member(user_id: int,
+                         principal: Principal = Depends(require_staff_manager)):
+    if user_id <= 0:
+        raise HTTPException(status_code=404, detail="Empleado no encontrado.")
+    try:
+        staff_disable(principal.organization_id, principal.user_id, user_id)
+    except (StaffForbidden, StaffNotFound) as exc:
+        raise _staff_error(exc) from exc
+    return {"status": "disabled"}
+
+
 @app.post("/analyze", response_model=Report)
-def analyze(file: UploadFile = File(...)):
+def analyze(file: UploadFile = File(...), principal: Principal = Depends(current_principal)):
     # FastAPI executes this blocking parser/database work in its worker pool.
     data = file.file.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
@@ -97,7 +220,7 @@ def analyze(file: UploadFile = File(...)):
         "text_sha256": text_sha256,
     }
 
-    new_id = save_analysis(report)
+    new_id = save_analysis(report, principal.organization_id)
 
     # Response al cliente (no hace falta mandar extracted_text entero)
     report_out = dict(report)
@@ -108,16 +231,16 @@ def analyze(file: UploadFile = File(...)):
 
 
 @app.get("/analyses/{analysis_id}")
-def get_analysis(analysis_id: int):
-    row = get_analysis_by_id(analysis_id)
+def get_analysis(analysis_id: int, principal: Principal = Depends(current_principal)):
+    row = get_analysis_by_id(analysis_id, principal.organization_id)
     if not row:
         raise HTTPException(status_code=404, detail="Analysis not found")
     return row
 
 
 @app.get("/analyses/{analysis_id}/export")
-def export_analysis(analysis_id: int):
-    row = get_analysis_export(analysis_id)
+def export_analysis(analysis_id: int, principal: Principal = Depends(current_principal)):
+    row = get_analysis_export(analysis_id, principal.organization_id)
     if not row:
         raise HTTPException(status_code=404, detail="Analysis not found")
 
@@ -138,8 +261,10 @@ def get_analyses(
     min_score: Optional[int] = Query(None, ge=0, le=100, description="Score mínimo (0-100)"),
     status: Optional[str] = Query(None, description="OK / REVISAR / RIESGO"),
     document_type: Optional[str] = Query(None, description="Ej: subsidy_application"),
+    principal: Principal = Depends(current_principal),
 ):
     return list_analyses(
+        organization_id=principal.organization_id,
         limit=limit,
         offset=offset,
         filename=filename,

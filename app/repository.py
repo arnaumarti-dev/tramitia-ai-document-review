@@ -8,7 +8,7 @@ from psycopg2.extras import RealDictCursor
 from app.db import get_conn
 
 
-def save_analysis(report: dict) -> int:
+def save_analysis(report: dict, organization_id: int) -> int:
     """
     Guarda y devuelve el ID creado.
     """
@@ -18,6 +18,7 @@ def save_analysis(report: dict) -> int:
             cur.execute(
                 """
                 INSERT INTO analyses (
+                    organization_id,
                     filename,
                     pages,
                     chars,
@@ -29,10 +30,11 @@ def save_analysis(report: dict) -> int:
                     extracted_text,
                     text_sha256
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id;
                 """,
                 (
+                    organization_id,
                     report["filename"],
                     report["pages"],
                     report["chars"],
@@ -41,7 +43,7 @@ def save_analysis(report: dict) -> int:
                     report.get("status"),
                     report.get("summary"),
                     json.dumps(report.get("findings", [])),
-                    report.get("extracted_text"),
+                    None,  # Do not retain personal document text by default.
                     report.get("text_sha256"),
                 ),
             )
@@ -53,13 +55,14 @@ def save_analysis(report: dict) -> int:
 
 
 def _build_filters(
+    organization_id: int,
     filename: Optional[str],
     min_score: Optional[int],
     status: Optional[str],
     document_type: Optional[str],
 ) -> Tuple[str, List[Any]]:
-    clauses: List[str] = []
-    params: List[Any] = []
+    clauses: List[str] = ["organization_id = %s"]
+    params: List[Any] = [organization_id]
 
     if filename:
         clauses.append("filename ILIKE %s")
@@ -77,13 +80,11 @@ def _build_filters(
         clauses.append("document_type = %s")
         params.append(document_type)
 
-    if not clauses:
-        return "", params
-
     return "WHERE " + " AND ".join(clauses), params
 
 
 def list_analyses(
+    organization_id: int,
     limit: int = 20,
     offset: int = 0,
     filename: Optional[str] = None,
@@ -99,7 +100,7 @@ def list_analyses(
       "offset": int
     }
     """
-    where_sql, params = _build_filters(filename, min_score, status, document_type)
+    where_sql, params = _build_filters(organization_id, filename, min_score, status, document_type)
 
     conn = get_conn()
     try:
@@ -134,7 +135,7 @@ def list_analyses(
         conn.close()
 
 
-def get_analysis_by_id(analysis_id: int) -> Optional[Dict[str, Any]]:
+def get_analysis_by_id(analysis_id: int, organization_id: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -152,9 +153,9 @@ def get_analysis_by_id(analysis_id: int) -> Optional[Dict[str, Any]]:
                     summary,
                     findings_json
                 FROM analyses
-                WHERE id = %s;
+                WHERE id = %s AND organization_id = %s;
                 """,
-                (analysis_id,),
+                (analysis_id, organization_id),
             )
             row = cur.fetchone()
             if not row:
@@ -175,7 +176,7 @@ def get_analysis_by_id(analysis_id: int) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
-def get_analysis_export(analysis_id: int) -> Optional[Dict[str, Any]]:
+def get_analysis_export(analysis_id: int, organization_id: int) -> Optional[Dict[str, Any]]:
     """
     Export completo: incluye findings + extracted_text + hash (si existen).
     """
@@ -198,9 +199,9 @@ def get_analysis_export(analysis_id: int) -> Optional[Dict[str, Any]]:
                     extracted_text,
                     text_sha256
                 FROM analyses
-                WHERE id = %s;
+                WHERE id = %s AND organization_id = %s;
                 """,
-                (analysis_id,),
+                (analysis_id, organization_id),
             )
             row = cur.fetchone()
             if not row:
@@ -217,5 +218,49 @@ def get_analysis_export(analysis_id: int) -> Optional[Dict[str, Any]]:
 
             row.pop("findings_json", None)
             return row
+    finally:
+        conn.close()
+
+
+def get_user_for_login(email: str, organization_slug: str) -> Optional[Dict[str, Any]]:
+    """Only active users and organizations with active memberships may log in."""
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT u.id AS user_id, o.id AS organization_id,
+                       u.password_hash, u.session_version, m.role
+                  FROM users u
+                  JOIN memberships m ON m.user_id = u.id
+                  JOIN organizations o ON o.id = m.organization_id
+                 WHERE u.email = %s AND o.slug = %s
+                   AND u.is_active AND o.is_active AND m.is_active;
+                """,
+                (email, organization_slug),
+            )
+            return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def get_membership_role(user_id: int, organization_id: int, session_version: int) -> Optional[str]:
+    """Re-check the membership on every request, including exports."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT m.role FROM memberships m
+                  JOIN users u ON u.id = m.user_id
+                  JOIN organizations o ON o.id = m.organization_id
+                 WHERE m.user_id = %s AND m.organization_id = %s
+                   AND u.session_version = %s
+                   AND m.is_active AND u.is_active AND o.is_active;
+                """,
+                (user_id, organization_id, session_version),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
     finally:
         conn.close()
