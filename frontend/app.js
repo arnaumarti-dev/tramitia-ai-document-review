@@ -45,6 +45,9 @@ const API = ""; // relative API: same backend that serves this frontend
             password: $("loginPassword").value,
           })
         });
+        if (response.status === 429) {
+          throw new Error("Demasiados intentos de acceso. Vuelve a probar en 15 minutos.");
+        }
         if (!response.ok) throw new Error("No se pudo iniciar sesión. Comprueba tus credenciales.");
         const data = await response.json();
         if (!data.access_token) throw new Error("El servidor no devolvió una sesión válida.");
