@@ -24,6 +24,7 @@ class Principal:
     user_id: int
     organization_id: int
     role: str
+    session_version: int = 0
 
 
 def _unauthorized() -> HTTPException:
@@ -63,6 +64,7 @@ def authenticate(email: str, password: str, organization_slug: str) -> Principal
         user_id=int(record["user_id"]),
         organization_id=int(record["organization_id"]),
         role=str(record["role"]),
+        session_version=int(record["session_version"]),
     )
 
 
@@ -74,6 +76,7 @@ def issue_token(principal: Principal) -> str:
             "aud": AUDIENCE,
             "sub": str(principal.user_id),
             "org": principal.organization_id,
+            "ver": principal.session_version,
             "iat": now,
             "exp": now + timedelta(minutes=TOKEN_MINUTES),
         },
@@ -94,17 +97,19 @@ def current_principal(
             algorithms=["HS256"],
             issuer=ISSUER,
             audience=AUDIENCE,
-            options={"require": ["sub", "org", "exp", "iat", "iss", "aud"]},
+            options={"require": ["sub", "org", "ver", "exp", "iat", "iss", "aud"]},
         )
         user_id = int(payload["sub"])
         organization_id = int(payload["org"])
-        if user_id <= 0 or organization_id <= 0:
+        session_version = int(payload["ver"])
+        if user_id <= 0 or organization_id <= 0 or session_version < 0:
             raise ValueError("invalid identifiers")
     except (InvalidTokenError, KeyError, TypeError, ValueError) as exc:
         raise _unauthorized() from exc
 
     # A signed token is not enough: revoking an active membership takes effect now.
-    role = get_membership_role(user_id, organization_id)
+    role = get_membership_role(user_id, organization_id, session_version)
     if not role:
         raise _unauthorized()
-    return Principal(user_id=user_id, organization_id=organization_id, role=role)
+    return Principal(user_id=user_id, organization_id=organization_id, role=role,
+                     session_version=session_version)
