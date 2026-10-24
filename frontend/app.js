@@ -3,6 +3,63 @@ const API = ""; // relative API: same backend that serves this frontend
     let offset = 0;
     let total = 0;
     let analysisInProgress = false;
+    // Tokens live only in memory; do not persist them in localStorage.
+    let authToken = null;
+
+    function logout() {
+      authToken = null;
+      $("workspace").hidden = true;
+      $("loginPanel").hidden = false;
+      $("loginPassword").value = "";
+      $("historyBody").innerHTML = "";
+      $("analysisCard").innerHTML = "";
+      $("sessionInfo").textContent = "";
+      closeModal();
+    }
+
+    async function apiFetch(path, options = {}) {
+      if (!authToken) throw new Error("Inicia sesión para continuar.");
+      const res = await fetch(API + path, {
+        ...options,
+        headers: { ...(options.headers || {}), Authorization: "Bearer " + authToken }
+      });
+      if (res.status === 401) {
+        logout();
+        throw new Error("La sesión ha caducado. Vuelve a iniciar sesión.");
+      }
+      return res;
+    }
+
+    async function login(event) {
+      event.preventDefault();
+      const btn = $("btnLogin");
+      btn.disabled = true;
+      $("loginError").textContent = "";
+      try {
+        const response = await fetch(API + "/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            organization: $("loginOrg").value.trim(),
+            email: $("loginEmail").value.trim(),
+            password: $("loginPassword").value,
+          })
+        });
+        if (!response.ok) throw new Error("No se pudo iniciar sesión. Comprueba tus credenciales.");
+        const data = await response.json();
+        if (!data.access_token) throw new Error("El servidor no devolvió una sesión válida.");
+        authToken = data.access_token;
+        $("loginPassword").value = "";
+        $("loginPanel").hidden = true;
+        $("workspace").hidden = false;
+        $("sessionInfo").textContent = "Gestoría: " + $("loginOrg").value.trim();
+        await loadAnalyses(true);
+      } catch (error) {
+        $("loginError").textContent = error.message || "No se pudo iniciar sesión.";
+      } finally {
+        btn.disabled = false;
+      }
+    }
 
     const $ = (id) => document.getElementById(id);
 
@@ -15,7 +72,7 @@ const API = ""; // relative API: same backend that serves this frontend
 
     function statusBadge(status) {
       const cls = statusClass(status);
-      return `<span class="badge ${cls}"><span class="dot"></span>${status || "-"}</span>`;
+      return `<span class="badge ${cls}"><span class="dot"></span>${escapeHtml(status || "-")}</span>`;
     }
 
     function severityClass(severity) {
@@ -164,7 +221,7 @@ const API = ""; // relative API: same backend that serves this frontend
         const form = new FormData();
         form.append("file", fileInput.files[0]);
 
-        const res = await fetch(API + "/analyze", { method: "POST", body: form });
+        const res = await apiFetch("/analyze", { method: "POST", body: form });
         if (!res.ok) {
           throw new Error(await uploadErrorMessage(res));
         }
@@ -189,7 +246,7 @@ const API = ""; // relative API: same backend that serves this frontend
       if (resetOffset) offset = 0;
 
       try {
-        const res = await fetch(API + "/analyses?" + buildQuery());
+        const res = await apiFetch("/analyses?" + buildQuery());
         if (!res.ok) {
           const errorText = await res.text();
           throw new Error(`HTTP ${res.status}: ${errorText}`);
@@ -208,12 +265,18 @@ const API = ""; // relative API: same backend that serves this frontend
                 <td>${statusBadge(a.status)}</td>
                 <td class="right"><strong>${escapeHtml(a.score ?? "")}</strong></td>
                 <td class="right">
-                  <a class="export-link" href="${API}/analyses/${encodeURIComponent(a.id)}/export" target="_blank" onclick="event.stopPropagation()">JSON</a>
+                  <button class="export-link" type="button" data-export-id="${escapeHtml(a.id)}">JSON</button>
                 </td>
               </tr>
             `).join("")
           : `<tr><td colspan="6" class="muted">No hay resultados.</td></tr>`;
 
+        document.querySelectorAll("#historyBody button[data-export-id]").forEach((button) => {
+          button.addEventListener("click", (event) => {
+            event.stopPropagation();
+            downloadExport(button.dataset.exportId);
+          });
+        });
         document.querySelectorAll("#historyBody tr[data-id]").forEach((row) => {
           row.addEventListener("click", () => openDetail(row.dataset.id));
         });
@@ -237,7 +300,7 @@ const API = ""; // relative API: same backend that serves this frontend
 
     async function openDetail(id) {
       try {
-        const res = await fetch(API + "/analyses/" + encodeURIComponent(id));
+        const res = await apiFetch("/analyses/" + encodeURIComponent(id));
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         const score = clampScore(data.score);
@@ -257,7 +320,7 @@ const API = ""; // relative API: same backend that serves this frontend
                   <span class="kv">Tipo: ${escapeHtml(data.document_type || "-")}</span>
                 </div>
               </div>
-              <a class="export-link" href="${API}/analyses/${encodeURIComponent(data.id)}/export" target="_blank">Exportar JSON</a>
+              <button class="export-link" type="button" data-export-id="${escapeHtml(data.id)}">Exportar JSON</button>
             </div>
 
             <div class="progress"><div style="width:${score}%; background:${color}"></div></div>
@@ -275,10 +338,35 @@ const API = ""; // relative API: same backend that serves this frontend
             </ul>` : `<div class="empty-state"><strong>Sin hallazgos</strong>No se han detectado incidencias relevantes.</div>`}
           </div>
         `;
+        const exportButton = $("modalContent").querySelector("[data-export-id]");
+        if (exportButton) {
+          exportButton.addEventListener("click", () => downloadExport(exportButton.dataset.exportId));
+        }
         $("modal").classList.add("open");
         $("modal").setAttribute("aria-hidden", "false");
       } catch (error) {
         alert("No se pudo abrir el análisis.");
+      }
+    }
+
+    async function downloadExport(id) {
+      try {
+        const response = await apiFetch("/analyses/" + encodeURIComponent(id) + "/export");
+        if (!response.ok) throw new Error("No se pudo exportar este análisis.");
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        try {
+          const link = document.createElement("a");
+          link.href = objectUrl;
+          link.download = "analysis_" + id + ".json";
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+        } finally {
+          URL.revokeObjectURL(objectUrl);
+        }
+      } catch (error) {
+        alert(error.message || "No se pudo descargar el informe.");
       }
     }
 
@@ -296,6 +384,8 @@ const API = ""; // relative API: same backend that serves this frontend
     }
 
     document.addEventListener("DOMContentLoaded", async () => {
+      $("loginForm").addEventListener("submit", login);
+      $("btnLogout").addEventListener("click", logout);
       $("btnAnalyze").addEventListener("click", analyze);
       $("btnRefresh").addEventListener("click", () => loadAnalyses(false));
       $("btnApply").addEventListener("click", () => loadAnalyses(true));
@@ -340,6 +430,5 @@ const API = ""; // relative API: same backend that serves this frontend
       });
 
       await checkHealth();
-      await loadAnalyses(true);
       setInterval(checkHealth, 10000);
     });
