@@ -24,6 +24,7 @@ app = FastAPI(title="TramitIA MVP")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 app.mount("/frontend", StaticFiles(directory=FRONTEND_DIR), name="frontend")
 
@@ -53,8 +54,11 @@ def health():
 
 
 @app.post("/analyze", response_model=Report)
-async def analyze(file: UploadFile = File(...)):
-    data = await file.read()
+def analyze(file: UploadFile = File(...)):
+    # FastAPI executes this blocking parser/database work in its worker pool.
+    data = file.file.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="El PDF supera el límite de 20 MB.")
     if not data:
         raise HTTPException(status_code=400, detail="El archivo está vacío.")
 
