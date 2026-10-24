@@ -109,6 +109,28 @@ class PDFWorkerFailureTests(unittest.TestCase):
                         parse_pdf_document(b"%PDF-1.7")
                     self.assertEqual(ctx.exception.status_code, 422)
 
+    def test_overloaded_worker_is_rejected_without_spawning(self):
+        with patch("app.pdf_processing._WORKER_SLOT") as slot, patch(
+            "app.pdf_processing.subprocess.run"
+        ) as spawn:
+            slot.acquire.return_value = False
+            with self.assertRaises(PdfProcessingError) as ctx:
+                parse_pdf_document(b"%PDF-1.7")
+            self.assertEqual(ctx.exception.status_code, 503)
+            self.assertIn("ocupado", ctx.exception.message)
+            spawn.assert_not_called()
+            slot.release.assert_not_called()
+
+    def test_worker_slot_is_released_after_crash(self):
+        with patch("app.pdf_processing._WORKER_SLOT") as slot, patch(
+            "app.pdf_processing.subprocess.run",
+            return_value=SimpleNamespace(returncode=-9, stdout=b""),
+        ):
+            slot.acquire.return_value = True
+            with self.assertRaises(PdfProcessingError):
+                parse_pdf_document(b"%PDF-1.7")
+            slot.release.assert_called_once()
+
     def test_worker_launch_failure_is_503(self):
         with patch("app.pdf_processing.subprocess.run", side_effect=OSError("missing executable")):
             with self.assertRaises(PdfProcessingError) as ctx:
