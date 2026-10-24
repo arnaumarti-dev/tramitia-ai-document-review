@@ -79,7 +79,7 @@ class UploadTests(unittest.TestCase):
             )
             self.assertEqual(response.status_code, 200)
             save.assert_called_once()
-        with patch("app.main.MAX_UPLOAD_BYTES", len(data) - 1), patch("app.main.save_analysis") as save, patch("app.main.PdfReader") as reader:
+        with patch("app.main.MAX_UPLOAD_BYTES", len(data) - 1), patch("app.main.save_analysis") as save, patch("app.main.parse_pdf_document") as reader:
             response = self.client.post(
                 "/analyze", files={"file": ("large.pdf", data, "application/pdf")}
             )
@@ -90,7 +90,7 @@ class UploadTests(unittest.TestCase):
 
     def test_reject_non_pdf_signature_before_parser(self):
         # The client-provided filename and MIME must never prove a file is a PDF.
-        with patch("app.main.save_analysis") as save, patch("app.main.PdfReader") as reader:
+        with patch("app.main.save_analysis") as save, patch("app.main.parse_pdf_document") as reader:
             response = self.client.post(
                 "/analyze",
                 files={"file": ("fake.pdf", b"not a real PDF", "application/pdf")},
