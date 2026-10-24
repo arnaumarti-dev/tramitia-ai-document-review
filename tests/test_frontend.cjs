@@ -251,3 +251,19 @@ test('staff roster escapes hostile data and manager can disable access', async (
     x.options.headers.Authorization === 'Bearer frontend-only-test-token'));
   assert.match(element('staffSuccess').textContent, /desactivado/);
 });
+
+
+test('invitation URL fragment is cleared before showing acceptance form', () => {
+  const { context, element } = setup(async () => ({ ok: true }));
+  vm.runInContext(`
+    window.location.hash = '#invite=abcdefghijklmnopqrstuvwxyz123456&org=gestoria';
+    window.location.pathname = '/';
+    window.history = { replaceState(_a, _b, uri) { window.location.hash = ''; window.location.pathname = uri; } };
+  `, context);
+  context.initializeInvite();
+  assert.equal(element('invitePanel').hidden, false);
+  assert.equal(element('loginPanel').hidden, true);
+  assert.equal(element('loginOrg').value, 'gestoria');
+  assert.equal(vm.runInContext('pendingInviteToken', context), 'abcdefghijklmnopqrstuvwxyz123456');
+  assert.equal(vm.runInContext('window.location.hash', context), '');
+});
