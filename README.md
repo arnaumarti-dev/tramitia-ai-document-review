@@ -422,6 +422,42 @@ limits; cap concurrent workers, enforce an HTTP upload-body ceiling
 *before* multipart buffering, and review operational logs, data retention,
 security and GDPR requirements.
 
+### Container-restricted PDF parsing (optional development mode)
+
+On Linux with a **local trusted Docker daemon**, the PDF parser can run in
+a disposable container with no network, no host mounts, a read-only root
+filesystem, disabled privilege escalation, all Linux capabilities dropped,
+a non-root user, 32-process limit, 768 MiB RAM cap, and one CPU quota.
+The image has only Python, pypdf and the standalone parser script.
+
+```bash
+docker build -f Dockerfile.pdf-worker -t tramitia-pdf-worker:local .
+export TRAMITIA_PDF_WORKER_BACKEND=container
+export TRAMITIA_PDF_WORKER_IMAGE=tramitia-pdf-worker:local
+uvicorn app.main:app
+```
+
+Use `TRAMITIA_PDF_WORKER_BACKEND=subprocess` (the default) for lightweight
+local development; **that mode has no filesystem or network isolation**.
+Unknown backends fail closed. The image must be built in advance; the API
+refuses to pull arbitrary images from an external registry. Containers are
+launched via the **local Docker socket** (remote Docker contexts ignored),
+and PDFs and extraction results travel only over stdin/stdout. Each worker
+uses an ephemeral container with no persistent volume or attached network.
+The CI suite runs a real container probe for network, host filesystem and
+secrets, then runs the complete Chromium scenario with this mode enabled.
+
+**Important security tradeoff:** granting the web-server process access
+to a rootful Docker socket effectively gives it high host privileges.
+The container isolates the PDF parser but **does not** isolate the web
+server from the daemon. This configuration is for development/CI only;
+production must move the Docker/container launcher into a separate
+least-privileged worker service, broker or VM and remove Docker API
+access from the internet-facing application. Enforce a separate service
+identity, seccomp/AppArmor policies, image digest pinning, audit logs,
+whole-request upload and memory caps, queue quotas and secure retention.
+Do not expose the current application to client documents.
+
 ## Security and production status
 
 **Development-only; do not upload real client documents.** The repository
