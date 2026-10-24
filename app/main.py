@@ -1,5 +1,4 @@
 import hashlib
-import io
 import re
 from typing import Optional, Literal
 
@@ -9,8 +8,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
-from pypdf import PdfReader
-from pypdf.errors import PdfReadError
 from pydantic import BaseModel, Field
 
 from app.auth import Principal, authenticate, current_principal, issue_token, TOKEN_MINUTES
@@ -18,6 +15,7 @@ from app.staff import (StaffForbidden, StaffConflict, StaffNotFound,
                        list_staff as staff_list, disable_staff as staff_disable)
 from app.invitations import create_invitation, accept_invitation, InvalidInvitation
 from app.passwords import change_password, InvalidPassword
+from app.pdf_processing import parse_pdf_document, PdfProcessingError
 
 from app.schemas.report import Report
 from app.core.validators import validate_subsidy_application
@@ -180,7 +178,7 @@ def disable_staff_member(user_id: int,
 
 @app.post("/analyze", response_model=Report)
 def analyze(file: UploadFile = File(...), principal: Principal = Depends(current_principal)):
-    # FastAPI executes this blocking parser/database work in its worker pool.
+    # FastAPI runs the blocking subprocess call outside the event loop.
     data = file.file.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="El PDF supera el límite de 20 MB.")
@@ -204,41 +202,16 @@ def analyze(file: UploadFile = File(...), principal: Principal = Depends(current
             detail="El nombre del archivo PDF no es válido.",
         )
 
-    # These limits bound accepted document complexity and saved metadata.
-    # They do NOT make pypdf a sandbox: hostile input can still exhaust CPU or
-    # memory DURING individual page parsing before a post-extraction check.
+    # The untrusted document is parsed in a separate short-lived process,
+    # with Linux CPU/address-space caps and a cross-platform wall timeout.
     try:
-        reader = PdfReader(io.BytesIO(data))
-        if reader.is_encrypted:
-            raise HTTPException(
-                status_code=400,
-                detail="El PDF está protegido. Sube una copia sin contraseña.",
-            )
-        page_count = len(reader.pages)
-        if page_count == 0:
-            raise HTTPException(status_code=400, detail="El PDF no contiene páginas.")
-        if page_count > MAX_PDF_PAGES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"El PDF supera el límite de {MAX_PDF_PAGES} páginas.",
-            )
-
-        chunks = []
-        chars = 0
-        for page in reader.pages:
-            chunk = (page.extract_text() or "") + "\n"
-            chars += len(chunk)
-            if chars > MAX_EXTRACTED_TEXT_CHARS:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"El PDF supera el límite de {MAX_EXTRACTED_TEXT_CHARS:,} caracteres de texto.",
-                )
-            chunks.append(chunk)
-        text = "".join(chunks)
-    except (PdfReadError, ValueError, KeyError, TypeError, RecursionError, OverflowError) as exc:
+        text, page_count = parse_pdf_document(
+            data, max_pages=MAX_PDF_PAGES,
+            max_chars=MAX_EXTRACTED_TEXT_CHARS,
+        )
+    except PdfProcessingError as exc:
         raise HTTPException(
-            status_code=400,
-            detail="No se puede leer el PDF. Comprueba que sea válido y no esté dañado.",
+            status_code=exc.status_code, detail=exc.message,
         ) from exc
 
     # hash del texto extraído (auditoría)
