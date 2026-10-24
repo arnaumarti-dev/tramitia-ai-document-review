@@ -17,7 +17,7 @@ function setup(fetch) {
   const context = vm.createContext({
     document: { getElementById: element, addEventListener() {}, querySelectorAll() { return []; } },
     fetch, FormData: class { append() {} }, URLSearchParams,
-    TypeError, window: { location: { origin: 'http://test' } }, alert() {}
+    TypeError, window: { location: { origin: 'http://test' } }, alert() {}, confirm() { return true; }
   });
   vm.runInContext(fs.readFileSync('frontend/app.js', 'utf8'), context);
   // Existing upload tests operate with a short-lived in-memory test session.
@@ -133,4 +133,87 @@ test('login obtains bearer token without storing credentials', async () => {
   assert.equal(element('workspace').hidden, false);
   assert.equal(element('loginPanel').hidden, true);
   assert.equal(vm.runInContext('authToken', context), 'new-token');
+});
+
+
+test('owner login displays staff panel and loads roster with bearer token', async () => {
+  const calls = [];
+  const { context, element } = setup(async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url === '/auth/login') return {
+      ok: true, json: async () => ({ access_token: 'owner-session', role: 'owner', user_id: 7 })
+    };
+    if (url === '/staff') return { ok: true, json: async () => ({
+      items: [{ user_id: 7, email: 'owner@example.com', role: 'owner', is_active: true }]
+    }) };
+    return { ok: true, json: async () => ({ total: 0, items: [] }) };
+  });
+  element('loginEmail').value = 'owner@example.com';
+  element('loginOrg').value = 'gestoria';
+  element('loginPassword').value = 'initial-password';
+  await context.login({ preventDefault() {} });
+  assert.equal(element('staffPanel').hidden, false);
+  assert.equal(element('staffRoleAdmin').hidden, false);
+  assert.ok(calls.some(x => x.url === '/staff' &&
+    x.options.headers.Authorization === 'Bearer owner-session'));
+  assert.match(element('staffBody').innerHTML, /owner@example.com/);
+  assert.doesNotMatch(element('staffBody').innerHTML, /data-disable-id="7"/);
+});
+
+test('employee login cannot see or fetch staff panel', async () => {
+  const requests = [];
+  const { context, element } = setup(async url => {
+    requests.push(url);
+    if (url === '/auth/login') return { ok: true, json: async () =>
+      ({ access_token: 'employee-session', role: 'employee', user_id: 9 }) };
+    return { ok: true, json: async () => ({ total: 0, items: [] }) };
+  });
+  element('loginEmail').value = 'worker@example.com';
+  element('loginOrg').value = 'gestoria';
+  element('loginPassword').value = 'test-password';
+  await context.login({ preventDefault() {} });
+  assert.equal(element('staffPanel').hidden, true);
+  assert.equal(element('staffRoleAdmin').hidden, true);
+  assert.deepEqual(requests, ['/auth/login', '/analyses?limit=10&offset=0']);
+});
+
+test('staff creation sends protected JSON without leaving password in form', async () => {
+  const calls = [];
+  const { context, element } = setup(async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url === '/staff' && options.method === 'POST')
+      return { ok: true, json: async () => ({ user_id: 11 }) };
+    return { ok: true, json: async () => ({ items: [] }) };
+  });
+  vm.runInContext("currentRole = 'owner'; currentUserId = 7", context);
+  element('staffEmail').value = 'person@example.com';
+  element('staffRole').value = 'employee';
+  element('staffPassword').value = 'temporary-long-password';
+  await context.addStaff({ preventDefault() {} });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, '/staff');
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer frontend-only-test-token');
+  assert.equal(JSON.parse(calls[0].options.body).email, 'person@example.com');
+  assert.equal(element('staffPassword').value, '');
+  assert.match(element('staffSuccess').textContent, /Empleado añadido/);
+});
+
+test('staff roster escapes hostile data and manager can disable access', async () => {
+  const calls = [];
+  const { context, element } = setup(async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url === '/staff') return { ok: true, json: async () => ({ items: [
+      { user_id: 12, email: '<img src=x onerror=alert(1)>', role: 'employee', is_active: true }
+    ] }) };
+    return { ok: true, json: async () => ({ status: 'disabled' }) };
+  });
+  vm.runInContext("currentRole = 'owner'; currentUserId = 7", context);
+  await context.loadStaff();
+  assert.match(element('staffBody').innerHTML, /&lt;img/);
+  assert.doesNotMatch(element('staffBody').innerHTML, /<img/);
+  await context.disableStaff(12);
+  assert.ok(calls.some(x => x.url === '/staff/12/disable' &&
+    x.options.method === 'POST' &&
+    x.options.headers.Authorization === 'Bearer frontend-only-test-token'));
+  assert.match(element('staffSuccess').textContent, /desactivado/);
 });
