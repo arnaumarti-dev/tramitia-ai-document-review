@@ -202,99 +202,165 @@ class TenantIsolationIntegrationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "last active owner"):
             disable_staff(self.slugs[0], self.users[0][1])
 
-    def test_staff_management_roles_and_tenant_isolation(self):
-        """Verify owner/admin/employee permissions on every management endpoint."""
-        owner_a, owner_b = self.headers
-        anonymous = self.client.get("/staff")
-        self.assertEqual(anonymous.status_code, 401)
-        response = self.client.get("/staff", headers=owner_a)
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertIn(self.users[0][1], [m["email"] for m in response.json()["items"]])
-        self.assertNotIn(self.users[1][1], [m["email"] for m in response.json()["items"]])
-
-        new_email = f"admin-{uuid.uuid4().hex[:12]}@example.invalid"
-        result = self.client.post("/staff", headers=owner_a, json={
-            "email": new_email, "role": "admin", "password": "admin-test-pass-123456",
+    def invite_and_accept(self, headers, email, role, password="test-user-secure-password"):
+        response = self.client.post("/staff/invitations", headers=headers, json={
+            "email": email, "role": role,
         })
-        self.assertEqual(result.status_code, 201, result.text)
-        self.assertEqual(result.json()["role"], "admin")
-        self.assertNotIn("password_hash", result.json())
-        admin_id = result.json()["user_id"]
-        self.users.append((admin_id, new_email))
-        admin_token = {"Authorization": "Bearer " + issue_token(
-            Principal(admin_id, self.organizations[0], "admin")
-        )}
-
-        # Admin may only create and disable employees, not other admins.
-        forbidden_create = self.client.post("/staff", headers=admin_token, json={
-            "email": f"another-{uuid.uuid4().hex[:10]}@example.invalid",
-            "role": "admin", "password": "password-more-than-12",
+        self.assertEqual(response.status_code, 201, response.text)
+        invite = response.json()
+        self.assertEqual(invite["expires_in"], 86400)
+        self.assertNotIn("password", invite)
+        accepted = self.client.post("/auth/invitations/accept", json={
+            "token": invite["invite_token"], "password": password,
         })
-        self.assertEqual(forbidden_create.status_code, 403)
-
-        worker_email = f"worker-{uuid.uuid4().hex[:12]}@example.invalid"
-        worker = self.client.post("/staff", headers=admin_token, json={
-            "email": worker_email.upper(), "role": "employee",
-            "password": "employee-strong-123456",
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        reused = self.client.post("/auth/invitations/accept", json={
+            "token": invite["invite_token"], "password": password,
         })
-        self.assertEqual(worker.status_code, 201, worker.text)
-        self.assertEqual(worker.json()["email"], worker_email)
-        worker_id = worker.json()["user_id"]
-        self.users.append((worker_id, worker_email))
-        employee_token = {"Authorization": "Bearer " + issue_token(
-            Principal(worker_id, self.organizations[0], "employee")
-        )}
+        self.assertEqual(reused.status_code, 400, reused.text)
+        login = self.client.post("/auth/login", json={
+            "email": email, "organization": self.slugs[0], "password": password,
+        })
+        self.assertEqual(login.status_code, 200, login.text)
+        user_id = login.json()["user_id"]
+        self.users.append((user_id, email))
+        return user_id, {"Authorization": "Bearer " + login.json()["access_token"]}
 
-        for method, path, payload in (
-            ("get", "/staff", None),
-            ("post", "/staff", {"email": "new@example.invalid", "role": "employee",
-                                "password": "strong-enough-pass"}),
-            ("post", f"/staff/{admin_id}/disable", None),
-        ):
-            res = getattr(self.client, method)(
-                path, headers=employee_token, **({"json": payload} if payload is not None else {})
+    def test_invitation_is_one_use_hashed_and_expires(self):
+        email = f"expiring-{uuid.uuid4().hex[:12]}@example.invalid"
+        invite = self.client.post("/staff/invitations", headers=self.headers[0], json={
+            "email": email, "role": "employee"
+        })
+        self.assertEqual(invite.status_code, 201, invite.text)
+        token = invite.json()["invite_token"]
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT token_hash, expires_at FROM staff_invitations WHERE email = %s",
+                (email,),
             )
-            self.assertEqual(res.status_code, 403, res.text)
+            row = cursor.fetchone()
+            self.assertNotEqual(token, row[0])
+            self.assertEqual(len(row[0]), 64)
+            cursor.execute(
+                "UPDATE staff_invitations SET expires_at = NOW() - INTERVAL '1 minute' WHERE email = %s",
+                (email,),
+            )
+        self.conn.commit()
+        expired = self.client.post("/auth/invitations/accept", json={
+            "token": token, "password": "new-secure-password-123"
+        })
+        self.assertEqual(expired.status_code, 400, expired.text)
+        self.assertEqual(self.client.post("/auth/invitations/accept", json={
+            "token": "invalid-token-aaaaaaaaaaaaaaaaaaaaaaaa",
+            "password": "new-secure-password-123"
+        }).status_code, 400)
 
+    def test_staff_invitation_management_roles_and_tenant_isolation(self):
+        owner_a, owner_b = self.headers
+        self.assertEqual(self.client.get("/staff").status_code, 401)
+        roster = self.client.get("/staff", headers=owner_a)
+        self.assertEqual(roster.status_code, 200, roster.text)
+        self.assertIn(self.users[0][1], [member["email"] for member in roster.json()["items"]])
+        self.assertNotIn(self.users[1][1], [member["email"] for member in roster.json()["items"]])
+
+        admin_email = f"admin-{uuid.uuid4().hex[:12]}@example.invalid"
+        admin_id, admin_token = self.invite_and_accept(owner_a, admin_email, "admin")
+        worker_email = f"worker-{uuid.uuid4().hex[:12]}@example.invalid"
+
+        self.assertEqual(self.client.post("/staff/invitations", headers=admin_token, json={
+            "email": f"admin2-{uuid.uuid4().hex[:12]}@example.invalid", "role": "admin",
+        }).status_code, 403)
+
+        invitation = self.client.post("/staff/invitations", headers=admin_token, json={
+            "email": worker_email, "role": "employee", "organization_id": self.organizations[1],
+        })
+        self.assertEqual(invitation.status_code, 201, invitation.text)
+        accepted = self.client.post("/auth/invitations/accept", json={
+            "token": invitation.json()["invite_token"],
+            "password": "worker-personal-password",
+        })
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        login = self.client.post("/auth/login", json={
+            "email": worker_email, "password": "worker-personal-password",
+            "organization": self.slugs[0],
+        })
+        self.assertEqual(login.status_code, 200, login.text)
+        worker_id = login.json()["user_id"]
+        employee_token = {"Authorization": "Bearer " + login.json()["access_token"]}
+        self.users.append((worker_id, worker_email))
+        wrong_org = self.client.post("/auth/login", json={
+            "email": worker_email, "password": "worker-personal-password",
+            "organization": self.slugs[1],
+        })
+        self.assertEqual(wrong_org.status_code, 401)
+
+        self.assertEqual(self.client.get("/staff", headers=employee_token).status_code, 403)
+        self.assertEqual(self.client.post("/staff/invitations", headers=employee_token, json={
+            "email": "another@example.invalid", "role": "employee",
+        }).status_code, 403)
+        self.assertEqual(self.client.post(f"/staff/{admin_id}/disable",
+                                          headers=employee_token).status_code, 403)
         self.assertEqual(self.client.post(f"/staff/{admin_id}/disable",
                                           headers=admin_token).status_code, 403)
         self.assertEqual(self.client.post(f"/staff/{worker_id}/disable",
                                           headers=owner_b).status_code, 404)
-        # Target remains active: cross-organization guesses cannot revoke.
         self.assertEqual(self.client.get("/analyses", headers=employee_token).status_code, 200)
-
-        # Admin can disable employees and tokens are rejected immediately.
         self.assertEqual(self.client.post(f"/staff/{worker_id}/disable",
                                           headers=admin_token).status_code, 200)
         self.assertEqual(self.client.get("/analyses", headers=employee_token).status_code, 401)
-
-        # No administrator can disable an owner or themselves.
         self.assertEqual(self.client.post(f"/staff/{self.users[0][0]}/disable",
                                           headers=admin_token).status_code, 403)
         self.assertEqual(self.client.post(f"/staff/{self.users[0][0]}/disable",
                                           headers=owner_a).status_code, 403)
-
-        # Only the owner can revoke an administrator.
         self.assertEqual(self.client.post(f"/staff/{admin_id}/disable",
                                           headers=owner_a).status_code, 200)
         self.assertEqual(self.client.get("/staff", headers=admin_token).status_code, 401)
 
-    def test_staff_creation_rejects_duplicates_and_invalid_input(self):
+    def test_invitation_duplicate_existing_user_and_invalid_input(self):
         owner_a, owner_b = self.headers
-        email = f"unique-{uuid.uuid4().hex[:10]}@example.invalid"
-        created = self.client.post("/staff", headers=owner_a, json={
-            "email": email, "role": "employee", "password": "test-password-123456",
-        })
-        self.assertEqual(created.status_code, 201, created.text)
-        self.users.append((created.json()["user_id"], email))
-        duplicate = self.client.post("/staff", headers=owner_b, json={
-            "email": email, "role": "employee", "password": "test-password-123456",
-        })
-        self.assertEqual(duplicate.status_code, 409, duplicate.text)
+        existing_email = self.users[0][1]
+        for owner in (owner_a, owner_b):
+            existing = self.client.post("/staff/invitations", headers=owner, json={
+                "email": existing_email, "role": "employee"
+            })
+            self.assertEqual(existing.status_code, 409, existing.text)
         for bad in (
-            {"email": "invalid", "role": "employee", "password": "test-password-123456"},
-            {"email": "valid@example.invalid", "role": "owner", "password": "test-password-123456"},
-            {"email": "valid@example.invalid", "role": "employee", "password": "short"},
+            {"email": "invalid", "role": "employee"},
+            {"email": "valid@example.invalid", "role": "owner"},
         ):
-            denied = self.client.post("/staff", headers=owner_a, json=bad)
-            self.assertEqual(denied.status_code, 422, denied.text)
+            response = self.client.post("/staff/invitations", headers=owner_a, json=bad)
+            self.assertEqual(response.status_code, 422, response.text)
+
+    def test_password_rotation_rejects_all_previous_tokens(self):
+        email = f"password-{uuid.uuid4().hex[:12]}@example.invalid"
+        user_id, headers = self.invite_and_accept(
+            self.headers[0], email, "employee", password="previous-personal-password"
+        )
+        self.assertEqual(self.client.post("/auth/password", headers=headers, json={
+            "current_password": "incorrect-password",
+            "new_password": "new-strong-personal-password",
+        }).status_code, 400)
+        self.assertEqual(self.client.get("/analyses", headers=headers).status_code, 200)
+        changed = self.client.post("/auth/password", headers=headers, json={
+            "current_password": "previous-personal-password",
+            "new_password": "new-strong-personal-password",
+        })
+        self.assertEqual(changed.status_code, 200, changed.text)
+        self.assertTrue(changed.json()["reauthentication_required"])
+        self.assertEqual(self.client.get("/analyses", headers=headers).status_code, 401)
+        self.assertEqual(self.client.post("/auth/password", headers=headers, json={
+            "current_password": "new-strong-personal-password",
+            "new_password": "another-password-attempt",
+        }).status_code, 401)
+        self.assertEqual(self.client.post("/auth/login", json={
+            "email": email, "organization": self.slugs[0],
+            "password": "previous-personal-password",
+        }).status_code, 401)
+        newer = self.client.post("/auth/login", json={
+            "email": email, "organization": self.slugs[0],
+            "password": "new-strong-personal-password",
+        })
+        self.assertEqual(newer.status_code, 200, newer.text)
+        self.assertEqual(self.client.get("/analyses", headers={
+            "Authorization": "Bearer " + newer.json()["access_token"]
+        }).status_code, 200)
