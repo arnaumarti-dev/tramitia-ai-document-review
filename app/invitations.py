@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from psycopg2.extras import RealDictCursor
 
 from app.db import get_conn
+from app.auth import hash_password
 from app.staff import _actor_role, StaffForbidden, StaffConflict
 
 INVITE_HOURS = 24
@@ -60,7 +61,7 @@ def create_invitation(organization_id: int, actor_id: int, email: str, role: str
         conn.close()
 
 
-def accept_invitation(token: str, password_hash: str) -> None:
+def accept_invitation(token: str, password: str) -> None:
     # Do not process oversized or malformed attacker input.
     if not token or len(token) > 200:
         raise InvalidInvitation()
@@ -92,7 +93,7 @@ def accept_invitation(token: str, password_hash: str) -> None:
                 INSERT INTO users (email, password_hash)
                 VALUES (%s, %s) ON CONFLICT (email) DO NOTHING RETURNING id
                 """,
-                (invitation["email"], password_hash),
+                (invitation["email"], hash_password(password)),
             )
             user = cursor.fetchone()
             if not user:
