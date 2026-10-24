@@ -275,28 +275,51 @@ Frontend tests use a simulated DOM rather than a browser.
 - Add AI-based requirement extraction from official calls or instructions.
 - Compare user documents against automatically extracted requirements.
 
-## Gestión de equipo desde el panel web (MVP)
+## Invitaciones y cambio de contraseña (MVP)
 
-El propietario puede acceder a **Equipo de la gestoría** tras iniciar sesión
-para consultar el listado, crear empleados/administradores con una contraseña
-inicial y desactivar cuentas. Los administradores pueden gestionar únicamente
-empleados; los empleados normales no tienen acceso a estas rutas. **Ningún rol
-puede desactivar al propietario** desde este panel.
+El propietario puede gestionar el equipo desde la interfaz web: ver usuarios,
+invitar empleados o administradores y desactivar accesos. Los administradores
+pueden invitar y desactivar **solo empleados**. Los empleados normales no
+pueden entrar al panel ni invitar a nadie.
 
-- `GET /staff`: devuelve como máximo 200 miembros exclusivamente de la gestoría del token.
-- `POST /staff`: correo, rol (`employee`/`admin`) y contraseña inicial de 12–128 caracteres. Solo el propietario puede crear administradores. Devuelve HTTP 409 si el correo ya existe.
-- `POST /staff/{user_id}/disable`: desactiva la membresía sin borrar documentos, revocando el acceso en su siguiente petición. Un identificador de otra gestoría devuelve HTTP 404.
+1. El responsable rellena correo y rol. TramitIA genera un enlace de invitación,
+   válido durante **24 horas** y de **un solo uso**, que se muestra una vez.
+2. El responsable comunica el enlace por un canal privado. **No hay envío
+   automático de correo ni verificación del control del buzón**: pendiente antes
+   de producción. El destinatario abre el enlace y elige su propia contraseña
+   de al menos 12 caracteres.
+3. El servidor crea el usuario con contraseña Argon2 y lo asocia a **la misma
+   gestoría del responsable**, nunca a una organización escogida por el cliente.
+   El token solo se almacena como SHA-256; los enlaces caducados, revocados o
+   ya usados se rechazan. Las invitaciones anteriores al mismo correo se
+   revocan cuando se emite otra.
+4. Cualquier usuario autenticado puede cambiar su propia contraseña
+   desde **Seguridad de mi cuenta**. La API incrementa la versión de su
+   sesión y **todos sus tokens anteriores dejan de funcionar**, incluso si
+   su caducidad de 30 minutos no se ha cumplido. Debe iniciar sesión de nuevo.
 
-Las operaciones revalidan al actor en una transacción PostgreSQL para impedir
-que una membresía revocada siga administrando. El frontend **no almacena
-contraseñas ni tokens** en almacenamiento persistente. Quien cree una cuenta
-debe entregar las credenciales provisionales por un canal seguro; falta
-implementar invitación, cambio de contraseña y recuperación de cuenta antes de
-un uso real. El panel es una comodidad, nunca el control de permisos.
+Rutas:
+
+- `GET /staff` – hasta 200 miembros de la gestoría autenticada.
+- `POST /staff/invitations` – correo y rol; devuelve un token secreto solo
+  una vez. Requiere propietario o administrador; solo propietario invita admins.
+- `POST /auth/invitations/accept` – token y contraseña personal para activar
+  la cuenta. Sin login previo.
+- `POST /auth/password` – contraseña actual y nueva; requiere sesión vigente
+  y revoca inmediatamente todas las sesiones del usuario tras el cambio.
+- `POST /staff/{user_id}/disable` – desactiva empleados y administradores según
+  rol; no se puede desactivar al propietario en este flujo.
+
+**Importante:** los enlaces se envían manualmente. No los publiques en
+GitHub, chats públicos, logs, screenshots o tickets. La CLI de gestión sigue
+existiendo para soporte local, pero el panel web ya no pide a un gestor que
+conozca o establezca las contraseñas de los empleados. Se necesitan
+verificación de correo, invitaciones por proveedor seguro, recuperación de
+cuenta, auditoría y revisión de seguridad antes del despliegue.
 
 ## Gestión de empleados (solo operador del servidor)
 
-En esta versión todavía no existe un sistema público de invitaciones: una
+La CLI está reservada para tareas excepcionales del operador. Una
 persona autorizada con acceso al servidor puede crear empleados desde la
 terminal, después de ejecutar `alembic upgrade head`.
 
