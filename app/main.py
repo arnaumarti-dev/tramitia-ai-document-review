@@ -13,10 +13,11 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 from pydantic import BaseModel, Field
 
-from app.auth import Principal, authenticate, current_principal, issue_token, hash_password, TOKEN_MINUTES
+from app.auth import Principal, authenticate, current_principal, issue_token, TOKEN_MINUTES
 from app.staff import (StaffForbidden, StaffConflict, StaffNotFound,
-                       list_staff as staff_list, create_staff as staff_create,
-                       disable_staff as staff_disable)
+                       list_staff as staff_list, disable_staff as staff_disable)
+from app.invitations import create_invitation, accept_invitation, InvalidInvitation
+from app.passwords import change_password, InvalidPassword
 
 from app.schemas.report import Report
 from app.core.validators import validate_subsidy_application
@@ -90,10 +91,44 @@ def require_staff_manager(principal: Principal = Depends(current_principal)) -> 
     return principal
 
 
-class CreateStaffRequest(BaseModel):
+class InviteStaffRequest(BaseModel):
     email: str = Field(min_length=5, max_length=254)
     role: Literal["employee", "admin"] = "employee"
+
+
+class AcceptInvitationRequest(BaseModel):
+    token: str = Field(min_length=20, max_length=200)
     password: str = Field(min_length=12, max_length=128)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=1024)
+    new_password: str = Field(min_length=12, max_length=128)
+
+
+@app.post("/auth/invitations/accept")
+def accept_staff_invitation(request: AcceptInvitationRequest):
+    try:
+        accept_invitation(request.token, request.password)
+    except InvalidInvitation as exc:
+        raise HTTPException(
+            status_code=400, detail="Invitación inválida, caducada o ya utilizada."
+        ) from exc
+    return {"status": "accepted"}
+
+
+@app.post("/auth/password")
+def update_own_password(request: ChangePasswordRequest,
+                        principal: Principal = Depends(current_principal)):
+    try:
+        change_password(principal.user_id, principal.organization_id,
+                        principal.session_version, request.current_password,
+                        request.new_password)
+    except InvalidPassword as exc:
+        raise HTTPException(
+            status_code=400, detail="Contraseña actual incorrecta o no se puede reutilizar."
+        ) from exc
+    return {"status": "updated", "reauthentication_required": True}
 
 
 def _staff_error(exc: Exception) -> HTTPException:
@@ -112,22 +147,21 @@ def get_staff(principal: Principal = Depends(require_staff_manager)):
         raise _staff_error(exc) from exc
 
 
-@app.post("/staff", status_code=201)
-def add_staff_member(request: CreateStaffRequest,
-                     principal: Principal = Depends(require_staff_manager)):
+@app.post("/staff/invitations", status_code=201)
+def invite_staff_member(request: InviteStaffRequest,
+                        principal: Principal = Depends(require_staff_manager)):
     email = request.email.strip().lower()
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
         raise HTTPException(status_code=422, detail="Correo electrónico no válido.")
     if request.role == "admin" and principal.role != "owner":
-        raise HTTPException(status_code=403, detail="Solo el propietario puede crear administradores.")
+        raise HTTPException(status_code=403, detail="Solo el propietario puede invitar administradores.")
     try:
-        # The service rechecks the actor's role inside the transaction.
-        return staff_create(
-            principal.organization_id, principal.user_id,
-            email, request.role, hash_password(request.password),
-        )
+        token = create_invitation(principal.organization_id, principal.user_id,
+                                  email, request.role)
     except (StaffForbidden, StaffConflict) as exc:
         raise _staff_error(exc) from exc
+    # Token is disclosed once to the manager; store only its digest server-side.
+    return {"invite_token": token, "expires_in": 24 * 60 * 60}
 
 
 @app.post("/staff/{user_id}/disable")
