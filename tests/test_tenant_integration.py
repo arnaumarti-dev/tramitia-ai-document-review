@@ -201,3 +201,100 @@ class TenantIsolationIntegrationTests(unittest.TestCase):
     def test_last_owner_cannot_be_disabled(self):
         with self.assertRaisesRegex(ValueError, "last active owner"):
             disable_staff(self.slugs[0], self.users[0][1])
+
+    def test_staff_management_roles_and_tenant_isolation(self):
+        """Verify owner/admin/employee permissions on every management endpoint."""
+        owner_a, owner_b = self.headers
+        anonymous = self.client.get("/staff")
+        self.assertEqual(anonymous.status_code, 401)
+        response = self.client.get("/staff", headers=owner_a)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn(self.users[0][1], [m["email"] for m in response.json()["items"]])
+        self.assertNotIn(self.users[1][1], [m["email"] for m in response.json()["items"]])
+
+        new_email = f"admin-{uuid.uuid4().hex[:12]}@example.invalid"
+        result = self.client.post("/staff", headers=owner_a, json={
+            "email": new_email, "role": "admin", "password": "admin-test-pass-123456",
+        })
+        self.assertEqual(result.status_code, 201, result.text)
+        self.assertEqual(result.json()["role"], "admin")
+        self.assertNotIn("password_hash", result.json())
+        admin_id = result.json()["user_id"]
+        self.users.append((admin_id, new_email))
+        admin_token = {"Authorization": "Bearer " + issue_token(
+            Principal(admin_id, self.organizations[0], "admin")
+        )}
+
+        # Admin may only create and disable employees, not other admins.
+        forbidden_create = self.client.post("/staff", headers=admin_token, json={
+            "email": f"another-{uuid.uuid4().hex[:10]}@example.invalid",
+            "role": "admin", "password": "password-more-than-12",
+        })
+        self.assertEqual(forbidden_create.status_code, 403)
+
+        worker_email = f"worker-{uuid.uuid4().hex[:12]}@example.invalid"
+        worker = self.client.post("/staff", headers=admin_token, json={
+            "email": worker_email.upper(), "role": "employee",
+            "password": "employee-strong-123456",
+        })
+        self.assertEqual(worker.status_code, 201, worker.text)
+        self.assertEqual(worker.json()["email"], worker_email)
+        worker_id = worker.json()["user_id"]
+        self.users.append((worker_id, worker_email))
+        employee_token = {"Authorization": "Bearer " + issue_token(
+            Principal(worker_id, self.organizations[0], "employee")
+        )}
+
+        for method, path, payload in (
+            ("get", "/staff", None),
+            ("post", "/staff", {"email": "new@example.invalid", "role": "employee",
+                                "password": "strong-enough-pass"}),
+            ("post", f"/staff/{admin_id}/disable", None),
+        ):
+            res = getattr(self.client, method)(
+                path, headers=employee_token, **({"json": payload} if payload is not None else {})
+            )
+            self.assertEqual(res.status_code, 403, res.text)
+
+        self.assertEqual(self.client.post(f"/staff/{admin_id}/disable",
+                                          headers=admin_token).status_code, 403)
+        self.assertEqual(self.client.post(f"/staff/{worker_id}/disable",
+                                          headers=owner_b).status_code, 404)
+        # Target remains active: cross-organization guesses cannot revoke.
+        self.assertEqual(self.client.get("/analyses", headers=employee_token).status_code, 200)
+
+        # Admin can disable employees and tokens are rejected immediately.
+        self.assertEqual(self.client.post(f"/staff/{worker_id}/disable",
+                                          headers=admin_token).status_code, 200)
+        self.assertEqual(self.client.get("/analyses", headers=employee_token).status_code, 401)
+
+        # No administrator can disable an owner or themselves.
+        self.assertEqual(self.client.post(f"/staff/{self.users[0][0]}/disable",
+                                          headers=admin_token).status_code, 403)
+        self.assertEqual(self.client.post(f"/staff/{self.users[0][0]}/disable",
+                                          headers=owner_a).status_code, 403)
+
+        # Only the owner can revoke an administrator.
+        self.assertEqual(self.client.post(f"/staff/{admin_id}/disable",
+                                          headers=owner_a).status_code, 200)
+        self.assertEqual(self.client.get("/staff", headers=admin_token).status_code, 401)
+
+    def test_staff_creation_rejects_duplicates_and_invalid_input(self):
+        owner_a, owner_b = self.headers
+        email = f"unique-{uuid.uuid4().hex[:10]}@example.invalid"
+        created = self.client.post("/staff", headers=owner_a, json={
+            "email": email, "role": "employee", "password": "test-password-123456",
+        })
+        self.assertEqual(created.status_code, 201, created.text)
+        self.users.append((created.json()["user_id"], email))
+        duplicate = self.client.post("/staff", headers=owner_b, json={
+            "email": email, "role": "employee", "password": "test-password-123456",
+        })
+        self.assertEqual(duplicate.status_code, 409, duplicate.text)
+        for bad in (
+            {"email": "invalid", "role": "employee", "password": "test-password-123456"},
+            {"email": "valid@example.invalid", "role": "owner", "password": "test-password-123456"},
+            {"email": "valid@example.invalid", "role": "employee", "password": "short"},
+        ):
+            denied = self.client.post("/staff", headers=owner_a, json=bad)
+            self.assertEqual(denied.status_code, 422, denied.text)
