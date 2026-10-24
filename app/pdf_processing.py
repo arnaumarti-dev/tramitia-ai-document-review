@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import threading
@@ -42,6 +43,46 @@ def _minimal_environment() -> dict[str, str]:
     return {key: os.environ[key] for key in allow if key in os.environ}
 
 
+def _worker_launch(max_pages: int, max_chars: int) -> tuple[list[str], dict[str, str]]:
+    """Select either the local test worker or a disposable container.
+
+    Container mode is opt-in, requires a pre-built local image and a trusted
+    Docker daemon. Never mount the web app filesystem or inherit its secrets.
+    """
+    backend = os.environ.get("TRAMITIA_PDF_WORKER_BACKEND", "subprocess")
+    if backend == "subprocess":
+        return (
+            [sys.executable, "-I", str(_WORKER), str(max_pages), str(max_chars)],
+            _minimal_environment(),
+        )
+    if backend != "container":
+        raise PdfProcessingError(503, "Configuración del analizador PDF no válida.")
+
+    image = os.environ.get("TRAMITIA_PDF_WORKER_IMAGE", "tramitia-pdf-worker:local")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._:/-]{0,150}", image):
+        raise PdfProcessingError(503, "La imagen del analizador PDF no es válida.")
+
+    # Explicitly bind to the LOCAL engine. Do not honor the web process's
+    # DOCKER_HOST/DOCKER_CONTEXT (which could transmit client PDFs remotely).
+    docker_host = ("npipe:////./pipe/docker_engine" if sys.platform == "win32"
+                   else "unix:///var/run/docker.sock")
+    command = [
+        "docker", "--host", docker_host, "run", "--rm", "--interactive",
+        "--pull=never",
+        "--network=none", "--read-only", "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        "--pids-limit=32",
+        "--memory=768m", "--memory-swap=768m", "--cpus=1",
+        "--user=65534:65534",
+        "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=8m",
+        "--log-driver=none",
+        "--env", "PYTHONDONTWRITEBYTECODE=1",
+        image, str(max_pages), str(max_chars),
+    ]
+    # Keep Docker CLI startup environment minimal; no application credentials.
+    return command, _minimal_environment()
+
+
 def _parse_pdf_document_unlocked(
     data: bytes,
     *,
@@ -51,14 +92,15 @@ def _parse_pdf_document_unlocked(
     if not (1 <= max_pages <= 50 and 1 <= max_chars <= 200_000):
         raise ValueError("Invalid worker resource limits")
 
+    command, environment = _worker_launch(max_pages, max_chars)
     try:
         completed = subprocess.run(
-            [sys.executable, "-I", str(_WORKER), str(max_pages), str(max_chars)],
+            command,
             input=data,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=MAX_WORKER_SECONDS,
-            env=_minimal_environment(),
+            env=environment,
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
