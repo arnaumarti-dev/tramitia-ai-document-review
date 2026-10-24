@@ -32,7 +32,8 @@ def validate_basic(text: str) -> List[Finding]:
             hint="Añade un correo electrónico de contacto."
         ))
 
-    if not re.search(r"\b(\+34)?[6-9]\d{8}\b", normalized.replace(" ", "")):
+    # Conserva los límites entre palabras y admite separadores del teléfono.
+    if not re.search(r"(?<!\w)(?:\+34[ -]*)?[6-9](?:[ -]*[0-9]){8}(?!\w)", normalized):
         findings.append(Finding(
             code="MISSING_PHONE",
             severity="info",
