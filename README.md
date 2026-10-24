@@ -422,6 +422,48 @@ limits; cap concurrent workers, enforce an HTTP upload-body ceiling
 *before* multipart buffering, and review operational logs, data retention,
 security and GDPR requirements.
 
+### PDF broker: separate the web API from the Docker control plane
+
+**Recommended architecture for the next development stage (Linux only):**
+
+1. Start the `app.pdf_broker` service under a **separate OS account**
+   that is permitted to access the local Docker daemon. Pre-build the
+   fixed image using `docker build -f Dockerfile.pdf-worker -t tramitia-pdf-worker:local .`.
+2. Configure the broker with `TRAMITIA_PDF_WORKER_BACKEND=container`,
+   `TRAMITIA_PDF_WORKER_IMAGE=tramitia-pdf-worker:local`, and
+   `TRAMITIA_BROKER_SOCKET=/run/tramitia/pdf-broker.sock`.
+   Start `python -m app.pdf_broker` under that account. The socket
+   directory must already exist and **must not be world-writable**.
+3. Give only the web-server user access to that socket via a dedicated
+   Unix group. Set `TRAMITIA_BROKER_SOCKET_GID` to that group's **numeric
+   GID** to create a mode `0660` socket; default is owner-only `0600`.
+   Keep the containing directory traversable only by this group.
+4. Run FastAPI with `TRAMITIA_PDF_WORKER_BACKEND=broker` and the same
+   `TRAMITIA_BROKER_SOCKET` path. **Do not** grant the FastAPI account
+   Docker socket/group permissions. The broker is not an HTTP endpoint;
+   its socket is local and accepts only PDF bytes, a page ceiling and
+   a character ceiling, never arbitrary Docker commands or image names.
+
+The fixed-size protocol checks message sizes (20 MiB input), pages
+(1–50), characters (1–200,000), and returns bounded JSON (3 MB).
+The privileged broker supervises the same ephemeral Docker worker with
+no network, no mounts, restricted Linux capabilities and memory/CPU caps.
+Invalid requests are discarded, failures return limited error categories,
+and a missing broker fails with HTTP 503, **without falling back to
+unrestricted PDF parsing**.
+
+The CI workflow verifies the broker protocol and exercises the end-to-end
+Chromium journey with broker → Docker container. **CI runs the broker and
+web server as the same runner account**, so it does not demonstrate the
+separate-user authorization boundary; deployment must provide that isolation.
+
+**Residual risks:** The broker itself holds Docker host privileges, and
+a compromised broker may still control the host. Production requires
+a dedicated host/VM or restricted container-runtime broker, independently
+managed identity and least-privilege socket policies, denial-of-service
+protection, tenant-aware job quotas, audit, and security review. Never
+mount the host Docker socket into the public-facing API process.
+
 ### Container-restricted PDF parsing (optional development mode)
 
 On Linux with a **local trusted Docker daemon**, the PDF parser can run in
