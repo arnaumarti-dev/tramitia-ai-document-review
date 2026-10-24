@@ -2,6 +2,7 @@ const API = ""; // relative API: same backend that serves this frontend
     let limit = 10;
     let offset = 0;
     let total = 0;
+    let analysisInProgress = false;
 
     const $ = (id) => document.getElementById(id);
 
@@ -129,12 +130,28 @@ const API = ""; // relative API: same backend that serves this frontend
       `;
     }
 
+    async function uploadErrorMessage(response) {
+      if (response.status >= 500) {
+        return "El servidor no ha podido completar el análisis. Inténtalo de nuevo más tarde.";
+      }
+      try {
+        const body = await response.json();
+        if (typeof body.detail === "string") return body.detail;
+      } catch {}
+      return "No se pudo analizar el archivo (HTTP " + response.status + ").";
+    }
+
     async function analyze() {
+      if (analysisInProgress) return;
       const fileInput = $("file");
       if (!fileInput.files.length) {
         alert("Selecciona un PDF");
         return;
       }
+
+      analysisInProgress = true;
+      $("btnAnalyze").disabled = true;
+      $("analysisCard").setAttribute("aria-busy", "true");
 
       $("analysisCard").innerHTML = `
         <div class="empty-state loading">
@@ -149,8 +166,7 @@ const API = ""; // relative API: same backend that serves this frontend
 
         const res = await fetch(API + "/analyze", { method: "POST", body: form });
         if (!res.ok) {
-          const errorText = await res.text();
-          throw new Error(`HTTP ${res.status}: ${errorText}`);
+          throw new Error(await uploadErrorMessage(res));
         }
 
         const data = await res.json();
@@ -158,7 +174,14 @@ const API = ""; // relative API: same backend that serves this frontend
         offset = 0;
         await loadAnalyses(false);
       } catch (error) {
-        renderError("analysisCard", "Error al analizar el PDF", `Comprueba que el backend esté corriendo en ${window.location.origin}`, error);
+        const message = error instanceof TypeError
+          ? "No se pudo conectar con el servidor. Comprueba la conexión e inténtalo de nuevo."
+          : error.message;
+        renderError("analysisCard", "Error al analizar el PDF", message);
+      } finally {
+        analysisInProgress = false;
+        $("btnAnalyze").disabled = false;
+        $("analysisCard").setAttribute("aria-busy", "false");
       }
     }
 
