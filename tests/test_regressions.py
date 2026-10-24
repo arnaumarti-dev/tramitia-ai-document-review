@@ -1,5 +1,8 @@
 import io
 import unittest
+import threading
+
+import httpx
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -58,12 +61,48 @@ class UploadTests(unittest.TestCase):
         self.assertNotIn("MISSING_PHONE", [f["code"] for f in report["findings"]])
         self.assertNotIn("extracted_text", response.json())
 
+    def test_upload_size_boundary(self):
+        data = make_pdf()
+        with patch("app.main.MAX_UPLOAD_BYTES", len(data)), patch("app.main.save_analysis", return_value=1) as save:
+            response = self.client.post(
+                "/analyze", files={"file": ("ok.pdf", data, "application/pdf")}
+            )
+            self.assertEqual(response.status_code, 200)
+            save.assert_called_once()
+        with patch("app.main.MAX_UPLOAD_BYTES", len(data) - 1), patch("app.main.save_analysis") as save, patch("app.main.PdfReader") as reader:
+            response = self.client.post(
+                "/analyze", files={"file": ("large.pdf", data, "application/pdf")}
+            )
+            self.assertEqual(response.status_code, 413)
+            self.assertIn("20 MB", response.json()["detail"])
+            reader.assert_not_called()
+            save.assert_not_called()
+
     def test_database_errors_remain_server_errors(self):
         with patch("app.main.save_analysis", side_effect=RuntimeError("database unavailable")):
             response = self.client.post(
                 "/analyze", files={"file": ("document.pdf", make_pdf(), "application/pdf")}
             )
         self.assertEqual(response.status_code, 500)
+
+
+class WorkerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_blocking_work_runs_outside_event_loop(self):
+        event_loop_thread = threading.get_ident()
+        worker_threads = []
+
+        def save(report):
+            worker_threads.append(threading.get_ident())
+            return 1
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            with patch("app.main.save_analysis", side_effect=save):
+                response = await client.post(
+                    "/analyze", files={"file": ("ok.pdf", make_pdf(), "application/pdf")}
+                )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(worker_threads), 1)
+        self.assertNotEqual(worker_threads[0], event_loop_thread)
 
 
 class PhoneTests(unittest.TestCase):
