@@ -230,7 +230,7 @@ def get_user_for_login(email: str, organization_slug: str) -> Optional[Dict[str,
             cur.execute(
                 """
                 SELECT u.id AS user_id, o.id AS organization_id,
-                       u.password_hash, m.role
+                       u.password_hash, u.session_version, m.role
                   FROM users u
                   JOIN memberships m ON m.user_id = u.id
                   JOIN organizations o ON o.id = m.organization_id
@@ -244,7 +244,7 @@ def get_user_for_login(email: str, organization_slug: str) -> Optional[Dict[str,
         conn.close()
 
 
-def get_membership_role(user_id: int, organization_id: int) -> Optional[str]:
+def get_membership_role(user_id: int, organization_id: int, session_version: int) -> Optional[str]:
     """Re-check the membership on every request, including exports."""
     conn = get_conn()
     try:
@@ -255,9 +255,10 @@ def get_membership_role(user_id: int, organization_id: int) -> Optional[str]:
                   JOIN users u ON u.id = m.user_id
                   JOIN organizations o ON o.id = m.organization_id
                  WHERE m.user_id = %s AND m.organization_id = %s
+                   AND u.session_version = %s
                    AND m.is_active AND u.is_active AND o.is_active;
                 """,
-                (user_id, organization_id),
+                (user_id, organization_id, session_version),
             )
             row = cur.fetchone()
             return row[0] if row else None
