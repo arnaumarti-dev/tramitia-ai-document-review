@@ -257,7 +257,7 @@ Frontend tests use a simulated DOM rather than a browser.
 
 - Uses **heuristic, rule-based** checks (regex/text signals), not advanced legal NLP.
 - No OCR pipeline for scanned/image-only PDFs.
-- Initial authentication and organization isolation exist; no self-service onboarding, password reset, rate limiting, or hardened session management.
+- Initial authentication and organization isolation exist; no self-service onboarding, password reset, IP-aware rate limiting, or hardened session management.
 - No background queue/job system for large batch workloads.
 - Alembic handles schema creation, but deployment migration/backup procedures still require operational review.
 - CORS and setup are tuned for local development.
@@ -274,6 +274,33 @@ Frontend tests use a simulated DOM rather than a browser.
 - Add containerized backend service for one-command local startup.
 - Add AI-based requirement extraction from official calls or instructions.
 - Compare user documents against automatically extracted requirements.
+
+## Gestión de empleados (solo operador del servidor)
+
+En esta versión todavía no existe un sistema público de invitaciones: una
+persona autorizada con acceso al servidor puede crear empleados desde la
+terminal, después de ejecutar `alembic upgrade head`.
+
+```bash
+python -m scripts.manage_staff --slug mi-gestoria add --email empleado@example.com --role employee
+python -m scripts.manage_staff --slug mi-gestoria add --email responsable@example.com --role admin
+python -m scripts.manage_staff --slug mi-gestoria list
+python -m scripts.manage_staff --slug mi-gestoria disable --email empleado@example.com
+```
+
+Las contraseñas se solicitan interactivamente y se guardan mediante un hash
+Argon2. No introduzcas contraseñas en argumentos ni en commits. Solo se admiten
+correos nuevos; añadir usuarios ya existentes a otras organizaciones necesitará
+un futuro flujo explícito de invitación/consentimiento. Un empleado desactivado
+pierde acceso incluso con un token JWT no caducado, porque su membresía se
+comprueba en cada petición. No se permite desactivar al último propietario.
+
+**Límite de intentos:** cinco contraseñas incorrectas en 15 minutos para la
+misma combinación gestoría/correo bloquean el acceso durante 15 minutos. El
+contador compartido se guarda en PostgreSQL mediante un HMAC del identificador,
+no con los correos en texto plano. Sigue haciendo falta protección perimetral
+por IP, supervisión, recuperación de cuentas y mitigación del bloqueo
+malicioso de cuentas para un despliegue real.
 
 ## Security and production status
 
