@@ -177,27 +177,61 @@ test('employee login cannot see or fetch staff panel', async () => {
   assert.deepEqual(requests, ['/auth/login', '/analyses?limit=10&offset=0']);
 });
 
-test('staff creation sends protected JSON without leaving password in form', async () => {
+test('staff invitations are issued without sending employee passwords', async () => {
   const calls = [];
   const { context, element } = setup(async (url, options = {}) => {
     calls.push({ url, options });
-    if (url === '/staff' && options.method === 'POST')
-      return { ok: true, json: async () => ({ user_id: 11 }) };
-    return { ok: true, json: async () => ({ items: [] }) };
+    return { ok: true, json: async () => ({ invite_token: 'random-once-secret', expires_in: 86400 }) };
   });
   vm.runInContext("currentRole = 'owner'; currentUserId = 7", context);
+  element('loginOrg').value = 'my-office';
   element('staffEmail').value = 'person@example.com';
   element('staffRole').value = 'employee';
-  element('staffPassword').value = 'temporary-long-password';
   await context.addStaff({ preventDefault() {} });
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0].url, '/staff');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/staff/invitations');
   assert.equal(calls[0].options.headers.Authorization, 'Bearer frontend-only-test-token');
   assert.equal(JSON.parse(calls[0].options.body).email, 'person@example.com');
-  assert.equal(element('staffPassword').value, '');
-  assert.match(element('staffSuccess').textContent, /Empleado añadido/);
+  assert.equal(JSON.parse(calls[0].options.body).password, undefined);
+  assert.match(element('staffInviteLink').value, /#invite=random-once-secret&org=my-office/);
+  assert.equal(element('staffInviteLinkPanel').hidden, false);
 });
 
+test('invitee accepts a link with their own password and token clears', async () => {
+  const calls = [];
+  const { context, element } = setup(async (url, options = {}) => {
+    calls.push({ url, options });
+    return { ok: true, json: async () => ({ status: 'accepted' }) };
+  });
+  vm.runInContext("pendingInviteToken = 'one-time-token-value'", context);
+  element('inviteNewPassword').value = 'invitee-custom-strong-pass';
+  element('inviteConfirmPassword').value = 'invitee-custom-strong-pass';
+  await context.acceptInvite({ preventDefault() {} });
+  assert.equal(calls[0].url, '/auth/invitations/accept');
+  assert.equal(JSON.parse(calls[0].options.body).token, 'one-time-token-value');
+  assert.equal(JSON.parse(calls[0].options.body).password, 'invitee-custom-strong-pass');
+  assert.equal(element('inviteNewPassword').value, '');
+  assert.equal(element('loginPanel').hidden, false);
+  assert.equal(vm.runInContext('pendingInviteToken', context), null);
+});
+
+test('password change invalidates current browser session', async () => {
+  const calls = [];
+  const { context, element } = setup(async (url, options = {}) => {
+    calls.push({ url, options });
+    return { ok: true, json: async () => ({ status: 'updated' }) };
+  });
+  element('currentPassword').value = 'previous-password';
+  element('newPassword').value = 'brand-new-secure-pass';
+  element('newPasswordRepeat').value = 'brand-new-secure-pass';
+  await context.updatePassword({ preventDefault() {} });
+  assert.equal(calls[0].url, '/auth/password');
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer frontend-only-test-token');
+  assert.equal(JSON.parse(calls[0].options.body).new_password, 'brand-new-secure-pass');
+  assert.equal(vm.runInContext('authToken', context), null);
+  assert.equal(element('currentPassword').value, '');
+  assert.equal(element('workspace').hidden, true);
+});
 test('staff roster escapes hostile data and manager can disable access', async () => {
   const calls = [];
   const { context, element } = setup(async (url, options = {}) => {
