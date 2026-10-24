@@ -8,6 +8,7 @@ const API = ""; // relative API: same backend that serves this frontend
     let currentUserId = null;
     let currentRole = null;
     let staffMutationInProgress = false;
+    let pendingInviteToken = null;
 
     function logout() {
       authToken = null;
@@ -15,7 +16,11 @@ const API = ""; // relative API: same backend that serves this frontend
       currentRole = null;
       $("staffPanel").hidden = true;
       $("staffBody").innerHTML = "";
-      $("staffPassword").value = "";
+      $("staffInviteLink").value = "";
+      $("staffInviteLinkPanel").hidden = true;
+      $("currentPassword").value = "";
+      $("newPassword").value = "";
+      $("newPasswordRepeat").value = "";
       $("staffError").textContent = "";
       $("staffSuccess").textContent = "";
       $("workspace").hidden = true;
@@ -139,20 +144,23 @@ const API = ""; // relative API: same backend that serves this frontend
       staffMutationInProgress = true;
       $("btnAddStaff").disabled = true;
       try {
-        const response = await apiFetch("/staff", {
+        const response = await apiFetch("/staff/invitations", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             email: $("staffEmail").value.trim(),
             role: $("staffRole").value,
-            password: $("staffPassword").value,
           }),
         });
         if (!response.ok) throw new Error(staffResponseMessage(response.status));
-        $("staffPassword").value = "";
+        const result = await response.json();
+        const slug = $("loginOrg").value.trim();
+        const link = window.location.origin + "/#invite=" +
+          encodeURIComponent(result.invite_token) + "&org=" + encodeURIComponent(slug);
+        $("staffInviteLink").value = link;
+        $("staffInviteLinkPanel").hidden = false;
         $("staffEmail").value = "";
-        $("staffSuccess").textContent = "Empleado añadido correctamente.";
-        await loadStaff();
+        $("staffSuccess").textContent = "Invitación creada. Envía el enlace de forma privada; caduca en 24 horas.";
       } catch (error) {
         $("staffError").textContent = error.message || "No se pudo añadir el empleado.";
       } finally {
@@ -177,6 +185,85 @@ const API = ""; // relative API: same backend that serves this frontend
         $("staffError").textContent = error.message || "No se pudo desactivar.";
       } finally {
         staffMutationInProgress = false;
+      }
+    }
+
+    function initializeInvite() {
+      const fragment = window.location.hash || "";
+      if (!fragment.startsWith("#invite=")) return;
+      const params = new URLSearchParams(fragment.slice(1));
+      const token = params.get("invite") || "";
+      if (token.length < 20 || token.length > 200) return;
+      pendingInviteToken = token;
+      $("invitePanel").hidden = false;
+      $("loginPanel").hidden = true;
+      const org = params.get("org");
+      if (org) $("loginOrg").value = org;
+      // Avoid leaving the secret in browser history or accidental screenshots of URLs.
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState(null, "", window.location.pathname || "/");
+      }
+    }
+
+    async function acceptInvite(event) {
+      event.preventDefault();
+      if (!pendingInviteToken) return;
+      $("inviteAcceptError").textContent = "";
+      if ($("inviteNewPassword").value !== $("inviteConfirmPassword").value) {
+        $("inviteAcceptError").textContent = "Las contraseñas no coinciden.";
+        return;
+      }
+      const btn = $("btnAcceptInvite");
+      btn.disabled = true;
+      try {
+        const response = await fetch(API + "/auth/invitations/accept", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            token: pendingInviteToken,
+            password: $("inviteNewPassword").value,
+          }),
+        });
+        if (!response.ok) throw new Error("Invitación inválida, caducada o ya utilizada.");
+        pendingInviteToken = null;
+        $("inviteNewPassword").value = "";
+        $("inviteConfirmPassword").value = "";
+        $("invitePanel").hidden = true;
+        $("loginPanel").hidden = false;
+        $("loginError").textContent = "Cuenta activada. Accede con tu correo y nueva contraseña.";
+      } catch (error) {
+        $("inviteAcceptError").textContent = error.message || "No se pudo aceptar la invitación.";
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function updatePassword(event) {
+      event.preventDefault();
+      $("passwordError").textContent = "";
+      if ($("newPassword").value !== $("newPasswordRepeat").value) {
+        $("passwordError").textContent = "Las nuevas contraseñas no coinciden.";
+        return;
+      }
+      const btn = $("btnChangePassword");
+      btn.disabled = true;
+      try {
+        const response = await apiFetch("/auth/password", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            current_password: $("currentPassword").value,
+            new_password: $("newPassword").value,
+          }),
+        });
+        if (!response.ok) {
+          if (response.status === 400) throw new Error("Contraseña actual incorrecta o repetida.");
+          throw new Error("No se pudo actualizar la contraseña.");
+        }
+        logout();
+        $("loginError").textContent = "Contraseña cambiada. Inicia sesión de nuevo.";
+      } catch (error) {
+        $("passwordError").textContent = error.message || "Error al cambiar la contraseña.";
+      } finally {
+        btn.disabled = false;
       }
     }
 
@@ -504,6 +591,8 @@ const API = ""; // relative API: same backend that serves this frontend
       $("loginForm").addEventListener("submit", login);
       $("btnLogout").addEventListener("click", logout);
       $("staffForm").addEventListener("submit", addStaff);
+      $("inviteAcceptForm").addEventListener("submit", acceptInvite);
+      $("passwordForm").addEventListener("submit", updatePassword);
       $("btnRefreshStaff").addEventListener("click", loadStaff);
       $("btnAnalyze").addEventListener("click", analyze);
       $("btnRefresh").addEventListener("click", () => loadAnalyses(false));
@@ -548,6 +637,7 @@ const API = ""; // relative API: same backend that serves this frontend
         $("selectedFile").textContent = file.name;
       });
 
+      initializeInvite();
       await checkHealth();
       setInterval(checkHealth, 10000);
     });
