@@ -151,7 +151,10 @@ class AuthorizationTests(unittest.TestCase):
             ("get", "/auth/me"),
         ):
             with self.subTest(path=path), patch("app.main.save_analysis") as save:
-                response = getattr(self.client, method)(path)
+                if method == "post":
+                    response = self.client.post(path, files={"file": ("sample.pdf", b"x", "application/pdf")})
+                else:
+                    response = self.client.get(path)
                 self.assertEqual(response.status_code, 401, response.text)
                 save.assert_not_called()
 
