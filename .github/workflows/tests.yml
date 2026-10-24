@@ -69,13 +69,26 @@ jobs:
         env:
           TRAMITIA_BROWSER_E2E: "1"
           TRAMITIA_BROWSER_BASE_URL: http://127.0.0.1:8000
-          TRAMITIA_PDF_WORKER_BACKEND: container
+          TRAMITIA_PDF_WORKER_BACKEND: broker
           TRAMITIA_PDF_WORKER_IMAGE: tramitia-pdf-worker:ci
         run: |
           set -euo pipefail
+          broker_dir=$(mktemp -d)
+          chmod 700 "$broker_dir"
+          export TRAMITIA_BROKER_SOCKET="$broker_dir/pdf.sock"
+          # Broker alone owns Docker API calls; FastAPI uses only AF_UNIX.
+          TRAMITIA_PDF_WORKER_BACKEND=container python -m app.pdf_broker > /tmp/tramitia-broker.log 2>&1 &
+          broker_pid=$!
           uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level warning > /tmp/tramitia-e2e-uvicorn.log 2>&1 &
           server_pid=$!
-          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          trap 'kill "$server_pid" "$broker_pid" 2>/dev/null || true; rm -f "$TRAMITIA_BROKER_SOCKET"; rmdir "$broker_dir" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 60); do
+            if [ -S "$TRAMITIA_BROKER_SOCKET" ]; then
+              break
+            fi
+            sleep 1
+          done
+          test -S "$TRAMITIA_BROKER_SOCKET"
           for attempt in $(seq 1 60); do
             if curl --silent --show-error --fail http://127.0.0.1:8000/health > /dev/null; then
               break
