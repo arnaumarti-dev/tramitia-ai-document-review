@@ -9,7 +9,8 @@ function setup(fetch) {
     if (!elements.has(id)) elements.set(id, {
       innerHTML: '', disabled: false, attributes: {},
       files: [{}], value: '', textContent: '',
-      setAttribute(key, value) { this.attributes[key] = value; }
+      setAttribute(key, value) { this.attributes[key] = value; },
+      classList: { add() {}, remove() {} }
     });
     return elements.get(id);
   }
