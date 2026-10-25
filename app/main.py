@@ -2,7 +2,7 @@ import hashlib
 import re
 from typing import Optional, Literal
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
@@ -18,6 +18,9 @@ from app.passwords import change_password, InvalidPassword
 from app.pdf_processing import parse_pdf_document, PdfProcessingError
 from app.analysis_rate_limit import (
     consume_analysis_quota, AnalysisQuotaExceeded, AnalysisQuotaUnavailable,
+)
+from app.peer_rate_limit import (
+    enforce_peer_rate_limit, PeerRateLimited, PeerRateLimitUnavailable,
 )
 from app.upload_body_limit import UploadBodyLimit
 
@@ -65,6 +68,24 @@ def health():
     return {"status": "ok"}
 
 
+def _consume_peer_budget(request: Request, category: str) -> None:
+    # Never use arbitrary X-Forwarded-For headers supplied by clients.
+    peer = request.client.host if request.client else None
+    try:
+        enforce_peer_rate_limit(peer, category)
+    except PeerRateLimited as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="Demasiadas solicitudes desde esta conexión. Inténtalo más tarde.",
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+    except PeerRateLimitUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="El control de acceso por conexión no está disponible.",
+        ) from exc
+
+
 class LoginRequest(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     password: str = Field(min_length=1, max_length=1024)
@@ -72,7 +93,8 @@ class LoginRequest(BaseModel):
 
 
 @app.post("/auth/login")
-def login(request: LoginRequest):
+def login(request: LoginRequest, client_request: Request):
+    _consume_peer_budget(client_request, "login")
     principal = authenticate(request.email, request.password, request.organization)
     return {
         "access_token": issue_token(principal),
@@ -111,7 +133,8 @@ class ChangePasswordRequest(BaseModel):
 
 
 @app.post("/auth/invitations/accept")
-def accept_staff_invitation(request: AcceptInvitationRequest):
+def accept_staff_invitation(request: AcceptInvitationRequest, client_request: Request):
+    _consume_peer_budget(client_request, "invitation")
     try:
         accept_invitation(request.token, request.password)
     except InvalidInvitation as exc:
@@ -181,7 +204,7 @@ def disable_staff_member(user_id: int,
 
 
 @app.post("/analyze", response_model=Report)
-def analyze(file: UploadFile = File(...), principal: Principal = Depends(current_principal)):
+def analyze(request: Request, file: UploadFile = File(...), principal: Principal = Depends(current_principal)):
     # FastAPI runs the blocking subprocess call outside the event loop.
     data = file.file.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
@@ -205,6 +228,9 @@ def analyze(file: UploadFile = File(...), principal: Principal = Depends(current
             status_code=400,
             detail="El nombre del archivo PDF no es válido.",
         )
+
+    # IP-aware admission precedes the tenant/user budget and PDF parser.
+    _consume_peer_budget(request, "analyze")
 
     # Charge the authenticated user and organization *before* parsing. Two
     # counters are incremented atomically in PostgreSQL across API instances.
