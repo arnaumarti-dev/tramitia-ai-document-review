@@ -1,5 +1,6 @@
 import hashlib
 import re
+from contextlib import asynccontextmanager
 from typing import Optional, Literal
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends, Request
@@ -34,7 +35,14 @@ from app.repository import (
     get_analysis_export,
 )
 
-app = FastAPI(title="TramitIA MVP")
+@asynccontextmanager
+async def isolated_startup_lifespan(_app: FastAPI):
+    # Modern FastAPI startup hook; fail closed before accepting web requests.
+    validate_web_deployment()
+    yield
+
+
+app = FastAPI(title="TramitIA MVP", lifespan=isolated_startup_lifespan)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
@@ -333,11 +341,6 @@ def get_analyses(
         status=status,
         document_type=document_type,
     )
-
-
-# Fail isolated Linux deployments at startup if the server has Docker/root
-# permissions, lacks its protected Unix broker, or would parse PDFs locally.
-app.add_event_handler("startup", validate_web_deployment)
 
 
 # Keep the request-size guard OUTSIDE FastAPI's multipart parser and error
