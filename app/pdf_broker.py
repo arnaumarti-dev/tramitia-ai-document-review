@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import grp
 from pathlib import Path
 import socketserver
 import stat
@@ -140,9 +141,23 @@ def create_server(socket_path: str) -> PdfBrokerServer:
         raise RuntimeError("Broker socket already exists; check stale service")
     server = PdfBrokerServer(str(path), _Handler)
     try:
-        group = os.getenv("TRAMITIA_BROKER_SOCKET_GID")
-        if group is not None:
-            os.chown(path, -1, int(group))
+        group = os.getenv("TRAMITIA_BROKER_SOCKET_GROUP", "").strip()
+        numeric_gid = os.getenv("TRAMITIA_BROKER_SOCKET_GID", "").strip()
+        if group and numeric_gid:
+            raise RuntimeError("Configure either socket GROUP or GID, not both")
+        if group:
+            if not group.replace("-", "").replace("_", "").isalnum():
+                raise RuntimeError("Invalid broker socket group name")
+            gid = grp.getgrnam(group).gr_gid
+        elif numeric_gid:
+            if not numeric_gid.isascii() or not numeric_gid.isdigit():
+                raise RuntimeError("Invalid broker socket group ID")
+            gid = int(numeric_gid)
+        else:
+            gid = None
+        if gid is not None:
+            if path.stat().st_gid != gid:
+                os.chown(path, -1, gid)
             os.chmod(path, 0o660)
         else:
             os.chmod(path, 0o600)
