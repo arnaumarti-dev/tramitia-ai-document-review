@@ -89,6 +89,13 @@ jobs:
             echo "SECURITY FAILURE: Web API can access the Docker socket" >&2
             exit 1
           fi
+          # The runner checkout may not be traversable by the dedicated
+          # accounts. Stage only public application code into an immutable,
+          # root-owned temporary directory. Never stage .env or test secrets.
+          stage_dir=$(mktemp -d)
+          cp -a app frontend scripts "$stage_dir/"
+          sudo chown -R root:root "$stage_dir"
+          sudo chmod -R u=rwX,go=rX "$stage_dir"
           broker_dir=$(mktemp -d)
           chmod 750 "$broker_dir"
           sudo chown tramitia-ci-broker:tramitia-ci-web "$broker_dir"
@@ -101,15 +108,18 @@ jobs:
           fi
           # Broker has its own UID and Docker access; it receives no JWT,
           # database password, cloud credentials or user-supplied commands.
-          sudo -u tramitia-ci-broker -- env -i PATH="$PATH" \
-            HOME=/home/tramitia-ci-broker \
-            TRAMITIA_PDF_WORKER_BACKEND=container \
-            TRAMITIA_PDF_WORKER_IMAGE=tramitia-pdf-worker:ci \
-            TRAMITIA_BROKER_SOCKET="$TRAMITIA_BROKER_SOCKET" \
-            TRAMITIA_BROKER_SOCKET_GID="$broker_gid" \
-            "$(command -v python)" -m app.pdf_broker > /tmp/tramitia-broker.log 2>&1 &
+          (
+            cd "$stage_dir"
+            sudo -u tramitia-ci-broker -- env -i PATH="$PATH" \
+              HOME=/home/tramitia-ci-broker \
+              TRAMITIA_PDF_WORKER_BACKEND=container \
+              TRAMITIA_PDF_WORKER_IMAGE=tramitia-pdf-worker:ci \
+              TRAMITIA_BROKER_SOCKET="$TRAMITIA_BROKER_SOCKET" \
+              TRAMITIA_BROKER_SOCKET_GID="$broker_gid" \
+              "$(command -v python)" -m app.pdf_broker > /tmp/tramitia-broker.log 2>&1
+          ) &
           broker_pid=$!
-          trap 'kill "$broker_pid" "${server_pid:-}" 2>/dev/null || true; sudo pkill -u tramitia-ci-web -f "uvicorn app.main:app" 2>/dev/null || true; sudo pkill -u tramitia-ci-broker -f "app.pdf_broker" 2>/dev/null || true; sudo rm -f "$TRAMITIA_BROKER_SOCKET"; sudo rmdir "$broker_dir" 2>/dev/null || true' EXIT
+          trap 'kill "$broker_pid" "${server_pid:-}" 2>/dev/null || true; sudo pkill -u tramitia-ci-web -f "uvicorn app.main:app" 2>/dev/null || true; sudo pkill -u tramitia-ci-broker -f "app.pdf_broker" 2>/dev/null || true; sudo rm -f "$TRAMITIA_BROKER_SOCKET"; sudo rmdir "$broker_dir" 2>/dev/null || true; sudo rm -rf "$stage_dir"' EXIT
           for attempt in $(seq 1 60); do
             if [ -S "$TRAMITIA_BROKER_SOCKET" ]; then
               break
@@ -126,20 +136,26 @@ jobs:
           test "$(stat -c %G "$TRAMITIA_BROKER_SOCKET")" = "tramitia-ci-web"
           # Verify real permissioned PDF processing as the unprivileged web
           # identity, while the web cannot access the Docker control plane.
-          sudo -u tramitia-ci-web -- env PATH="$PATH" \
-            TRAMITIA_PDF_WORKER_BACKEND=broker \
-            TRAMITIA_BROKER_SOCKET="$TRAMITIA_BROKER_SOCKET" \
-            "$(command -v python)" -c 'from app.pdf_processing import parse_pdf_document; from scripts.generate_demo_pdf import make_demo_pdf; text, pages = parse_pdf_document(make_demo_pdf()); assert pages == 1 and "Solicitud ficticia" in text'
+          (
+            cd "$stage_dir"
+            sudo -u tramitia-ci-web -- env PATH="$PATH" \
+              TRAMITIA_PDF_WORKER_BACKEND=broker \
+              TRAMITIA_BROKER_SOCKET="$TRAMITIA_BROKER_SOCKET" \
+              "$(command -v python)" -c 'from app.pdf_processing import parse_pdf_document; from scripts.generate_demo_pdf import make_demo_pdf; text, pages = parse_pdf_document(make_demo_pdf()); assert pages == 1 and "Solicitud ficticia" in text'
+          )
           # Run actual FastAPI under the unprivileged account: JWT and
           # database credentials are scoped to the API, not the broker.
-          sudo -u tramitia-ci-web -- env PATH="$PATH" \
-            POSTGRES_HOST="$POSTGRES_HOST" POSTGRES_PORT="$POSTGRES_PORT" \
-            POSTGRES_DB="$POSTGRES_DB" POSTGRES_USER="$POSTGRES_USER" \
-            POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-            TRAMITIA_JWT_SECRET="$TRAMITIA_JWT_SECRET" \
-            TRAMITIA_PDF_WORKER_BACKEND=broker \
-            TRAMITIA_BROKER_SOCKET="$TRAMITIA_BROKER_SOCKET" \
-            "$(command -v python)" -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level warning > /tmp/tramitia-e2e-uvicorn.log 2>&1 &
+          (
+            cd "$stage_dir"
+            sudo -u tramitia-ci-web -- env PATH="$PATH" \
+              POSTGRES_HOST="$POSTGRES_HOST" POSTGRES_PORT="$POSTGRES_PORT" \
+              POSTGRES_DB="$POSTGRES_DB" POSTGRES_USER="$POSTGRES_USER" \
+              POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+              TRAMITIA_JWT_SECRET="$TRAMITIA_JWT_SECRET" \
+              TRAMITIA_PDF_WORKER_BACKEND=broker \
+              TRAMITIA_BROKER_SOCKET="$TRAMITIA_BROKER_SOCKET" \
+              "$(command -v python)" -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level warning > /tmp/tramitia-e2e-uvicorn.log 2>&1
+          ) &
           server_pid=$!
           for attempt in $(seq 1 60); do
             if curl --silent --show-error --fail http://127.0.0.1:8000/health > /dev/null; then
