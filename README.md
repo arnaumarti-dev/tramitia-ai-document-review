@@ -590,17 +590,51 @@ window is older than 48 hours. The purge is not automatically scheduled
 by the application. Treat those hashes as pseudonymous personal data,
 protect database access, and include them in the privacy/retention review.
 
-**Critical reverse-proxy limitation:** Uvicorn may rewrite the ASGI
-connection address when `--proxy-headers` is enabled. Start this
-development configuration with `uvicorn app.main:app --no-proxy-headers`
-unless a separately audited trust arrangement is in place. Behind a
-reverse proxy this makes all users share the proxy's apparent address
-and *may block legitimate traffic*; enforce genuine client-IP admission
-at the trusted **ingress**, where forwarding headers are overwritten and
-validated, before exposing the service publicly. This app-level check is
-only defense in depth and does not mitigate DDoS, connection floods,
-malicious reverse proxies or multi-layer IP spoofing. The limits
-may be adjusted after load tests and shared-NAT analysis.
+**Strict reverse-proxy trust:** Uvicorn may rewrite the ASGI
+connection address when `--proxy-headers` is enabled. Always start with
+`--no-proxy-headers`, including behind a trusted proxy.
+
+When an ingress is deployed, `TRAMITIA_TRUSTED_PROXY_IPS` may contain
+a comma-separated list of **at most eight exact direct-proxy IPs**.
+CIDRs and wildcard trust are rejected. By default this variable is unset
+and all forwarding headers are ignored. Only if the direct ASGI peer
+matches one of these IPs does the application accept **exactly one**
+`X-Real-IP` containing a valid IP literal; missing, malformed or duplicate
+headers fail closed with HTTP 503. `X-Forwarded-For` and `Forwarded`
+are never used for rate-limit identity. Any directly connected untrusted
+IP remains its own quota subject, regardless of headers.
+
+A supplied `deploy/nginx/nginx.conf` provides a **reference** HTTPS edge
+with body size/time limits, leaky-bucket limits for login/invitation/PDF,
+connection limits, and explicit forwarded-header sanitization. Its server
+name (`tramitia.example.invalid`) and TLS paths are placeholders and
+the configuration requires additional operations/security review.
+
+Single trusted-host example:
+
+```bash
+# On a dedicated host with valid certificates and reviewed network policy:
+# FastAPI port 8000 MUST NOT be externally reachable.
+export TRAMITIA_TRUSTED_PROXY_IPS=127.0.0.1
+export TRAMITIA_PDF_WORKER_BACKEND=broker
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-proxy-headers
+# Configure NGINX to proxy from the same host, overwrite X-Real-IP
+# with $remote_addr and clear client-submitted forwarding headers.
+```
+
+**Security requirements:** configure firewalling so clients cannot bypass
+NGINX and connect to FastAPI; keep the proxy and application on a trusted
+host/network; never allow untrusted local processes or containers to
+connect to an allowlisted address; and ensure the proxy does NOT inherit
+untrusted real-IP rewriting from an upstream. If behind another load
+balancer/CDN, audit its real-IP trust chain at NGINX separately: as supplied
+`$remote_addr` is the IP of the immediate upstream, not magically the
+original end user. Rate limits may affect clients sharing a NAT/public IP;
+review limits through legitimate load testing and ingress monitoring.
+
+App-level checks are defense in depth and do not mitigate DDoS,
+connection floods, malicious reverse proxies or spoofing at the network
+layer. Do not treat this reference setup as production certification.
 
 ## Security and production status
 
