@@ -177,7 +177,7 @@ jobs:
               TRAMITIA_JWT_SECRET="$TRAMITIA_JWT_SECRET" \
               TRAMITIA_PDF_WORKER_BACKEND=broker \
               TRAMITIA_BROKER_SOCKET="$TRAMITIA_BROKER_SOCKET" \
-              "$(command -v python)" -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level warning > /tmp/tramitia-e2e-uvicorn.log 2>&1
+              "$(command -v python)" -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-proxy-headers --log-level warning > /tmp/tramitia-e2e-uvicorn.log 2>&1
           ) &
           server_pid=$!
           for attempt in $(seq 1 180); do
