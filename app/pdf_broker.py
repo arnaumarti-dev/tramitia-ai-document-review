@@ -15,17 +15,26 @@ import socketserver
 import stat
 import struct
 import sys
+import threading
+import time
 
 from app.pdf_processing import PdfProcessingError, parse_pdf_document
 
 MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
 MAX_RESPONSE_BYTES = 3_000_000
+MAX_REQUEST_RECEIVE_SECONDS = 10
+MAX_CONCURRENT_BROKER_REQUESTS = 1
 _SOCKET_DEFAULT = "/run/tramitia/pdf-broker.sock"
 
 
-def _read_exact(sock, length: int) -> bytes:
+def _read_exact(sock, length: int, *, deadline: float) -> bytes:
+    """Bound total time to deliver the request, not just time between bytes."""
     chunks = []
     while length:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("PDF broker request exceeded receive deadline")
+        sock.settimeout(remaining)
         part = sock.recv(min(length, 65536))
         if not part:
             raise ConnectionError("Truncated broker message")
@@ -34,17 +43,29 @@ def _read_exact(sock, length: int) -> bytes:
     return b"".join(chunks)
 
 
+def _send_payload(sock, payload: dict) -> None:
+    content = json.dumps(
+        payload, ensure_ascii=True, separators=(",", ":")
+    ).encode("ascii")
+    if len(content) > MAX_RESPONSE_BYTES:
+        content = b'{"broker_error":"failed"}'
+    sock.sendall(struct.pack("!I", len(content)) + content)
+
+
 class _Handler(socketserver.BaseRequestHandler):
     def handle(self):
-        self.request.settimeout(19)
+        # A peer cannot hold the broker slot forever by sending one byte at
+        # a time. This absolute receive deadline is separate from PDF CPU
+        # and wall-clock limits.
+        deadline = time.monotonic() + MAX_REQUEST_RECEIVE_SECONDS
         try:
-            header = _read_exact(self.request, 12)
+            header = _read_exact(self.request, 12, deadline=deadline)
             length, pages, chars = struct.unpack("!III", header)
             if not (0 < length <= MAX_DOCUMENT_BYTES
                     and 1 <= pages <= 50 and 1 <= chars <= 200_000):
                 return
             # Never read more than the validated PDF byte count.
-            data = _read_exact(self.request, length)
+            data = _read_exact(self.request, length, deadline=deadline)
             try:
                 text, count = parse_pdf_document(
                     data, max_pages=pages, max_chars=chars
@@ -57,18 +78,50 @@ class _Handler(socketserver.BaseRequestHandler):
                     422: "failed", 503: "unavailable",
                 }.get(exc.status_code, "failed")
                 payload = {"broker_error": kind}
-            content = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("ascii")
-            if len(content) > MAX_RESPONSE_BYTES:
-                content = b'{"broker_error":"failed"}'
-            self.request.sendall(struct.pack("!I", len(content)) + content)
+            self.request.settimeout(3)
+            _send_payload(self.request, payload)
         except (ConnectionError, BrokenPipeError, OSError, TimeoutError,
                 ValueError, struct.error):
             # A malformed client request is discarded with no document echo.
             return
 
 
-class PdfBrokerServer(socketserver.UnixStreamServer):
+class PdfBrokerServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    """One active socket job; promptly reject overload without launching Docker.
+
+    The broker-level semaphore is shared by all FastAPI worker processes
+    connecting to this socket. Never start a thread for rejected work.
+    """
     allow_reuse_address = False
+    daemon_threads = True
+    block_on_close = False
+    request_queue_size = 4
+
+    def __init__(self, server_address, request_handler_class):
+        self._request_slots = threading.BoundedSemaphore(MAX_CONCURRENT_BROKER_REQUESTS)
+        super().__init__(server_address, request_handler_class)
+
+    def process_request(self, request, client_address):
+        if not self._request_slots.acquire(blocking=False):
+            try:
+                request.settimeout(1)
+                _send_payload(request, {"broker_error": "busy"})
+            except OSError:
+                pass
+            finally:
+                self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
 
 
 def create_server(socket_path: str) -> PdfBrokerServer:
