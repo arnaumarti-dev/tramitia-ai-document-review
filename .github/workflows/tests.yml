@@ -78,6 +78,8 @@ jobs:
           sudo groupadd --system tramitia-ci-web
           sudo useradd --system --create-home --gid tramitia-ci-web \
             --shell /usr/sbin/nologin tramitia-ci-web
+          sudo useradd --system --create-home --gid tramitia-ci-web \
+            --groups docker --shell /usr/sbin/nologin tramitia-ci-broker
           if id -nG tramitia-ci-web | grep -qw docker; then
             echo "SECURITY FAILURE: Web API identity has Docker membership" >&2
             exit 1
@@ -89,27 +91,39 @@ jobs:
           fi
           broker_dir=$(mktemp -d)
           chmod 750 "$broker_dir"
-          sudo chgrp tramitia-ci-web "$broker_dir"
+          sudo chown tramitia-ci-broker:tramitia-ci-web "$broker_dir"
           export TRAMITIA_BROKER_SOCKET="$broker_dir/pdf.sock"
           broker_gid=$(getent group tramitia-ci-web | cut -d: -f3)
-          # Broker receives NO application JWT/database environment variables.
-          # It alone has Docker access, and exposes a constrained Unix socket.
-          env -i PATH="$PATH" HOME="$HOME" \
+          test -r /var/run/docker.sock
+          if ! sudo -u tramitia-ci-broker test -r /var/run/docker.sock; then
+            echo "SECURITY TEST SETUP FAILURE: dedicated broker cannot access Docker" >&2
+            exit 1
+          fi
+          # Broker has its own UID and Docker access; it receives no JWT,
+          # database password, cloud credentials or user-supplied commands.
+          sudo -u tramitia-ci-broker -- env -i PATH="$PATH" \
+            HOME=/home/tramitia-ci-broker \
             TRAMITIA_PDF_WORKER_BACKEND=container \
             TRAMITIA_PDF_WORKER_IMAGE=tramitia-pdf-worker:ci \
             TRAMITIA_BROKER_SOCKET="$TRAMITIA_BROKER_SOCKET" \
             TRAMITIA_BROKER_SOCKET_GID="$broker_gid" \
             "$(command -v python)" -m app.pdf_broker > /tmp/tramitia-broker.log 2>&1 &
           broker_pid=$!
-          trap 'kill "$broker_pid" "${server_pid:-}" 2>/dev/null || true; sudo pkill -u tramitia-ci-web -f "uvicorn app.main:app" 2>/dev/null || true; rm -f "$TRAMITIA_BROKER_SOCKET"; rmdir "$broker_dir" 2>/dev/null || true' EXIT
+          trap 'kill "$broker_pid" "${server_pid:-}" 2>/dev/null || true; sudo pkill -u tramitia-ci-web -f "uvicorn app.main:app" 2>/dev/null || true; sudo pkill -u tramitia-ci-broker -f "app.pdf_broker" 2>/dev/null || true; sudo rm -f "$TRAMITIA_BROKER_SOCKET"; sudo rmdir "$broker_dir" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 60); do
             if [ -S "$TRAMITIA_BROKER_SOCKET" ]; then
               break
             fi
             sleep 1
           done
-          test -S "$TRAMITIA_BROKER_SOCKET"
+          if ! test -S "$TRAMITIA_BROKER_SOCKET"; then
+            echo "PDF broker did not start:" >&2
+            cat /tmp/tramitia-broker.log
+            exit 1
+          fi
           test "$(stat -c %a "$TRAMITIA_BROKER_SOCKET")" = "660"
+          test "$(stat -c %U "$TRAMITIA_BROKER_SOCKET")" = "tramitia-ci-broker"
+          test "$(stat -c %G "$TRAMITIA_BROKER_SOCKET")" = "tramitia-ci-web"
           # Verify real permissioned PDF processing as the unprivileged web
           # identity, while the web cannot access the Docker control plane.
           sudo -u tramitia-ci-web -- env PATH="$PATH" \
