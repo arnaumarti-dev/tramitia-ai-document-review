@@ -1,0 +1,40 @@
+# Reference systemd web unit for the daemonless PDF broker.
+# Start the pre-isolated container via deploy/pdf-broker.compose.yml *first*.
+# Neither this web service nor the broker process needs Docker access.
+[Unit]
+Description=TramitIA FastAPI (daemonless PDF broker)
+After=network.target
+
+[Service]
+Type=exec
+User=tramitia-web
+Group=tramitia-web
+WorkingDirectory=/opt/tramitia
+EnvironmentFile=/etc/tramitia/web.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=TRAMITIA_DEPLOYMENT_PROFILE=isolated
+Environment=TRAMITIA_PDF_WORKER_BACKEND=broker
+Environment=TRAMITIA_BROKER_SOCKET=/run/tramitia/pdf-broker.sock
+ExecStart=/opt/tramitia/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-proxy-headers --log-level warning
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+PrivateTmp=true
+PrivateDevices=true
+InaccessiblePaths=-/run/docker.sock
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+MemoryMax=768M
+TasksMax=64
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
