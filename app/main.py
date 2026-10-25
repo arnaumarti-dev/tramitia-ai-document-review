@@ -20,7 +20,7 @@ from app.analysis_rate_limit import (
     consume_analysis_quota, AnalysisQuotaExceeded, AnalysisQuotaUnavailable,
 )
 from app.peer_rate_limit import (
-    enforce_peer_rate_limit, PeerRateLimited, PeerRateLimitUnavailable,
+    enforce_peer_rate_limit, resolve_request_peer, PeerRateLimited, PeerRateLimitUnavailable,
 )
 from app.upload_body_limit import UploadBodyLimit
 
@@ -69,9 +69,10 @@ def health():
 
 
 def _consume_peer_budget(request: Request, category: str) -> None:
-    # Never use arbitrary X-Forwarded-For headers supplied by clients.
-    peer = request.client.host if request.client else None
+    # Only trust an X-Real-IP supplied by a strictly allowlisted direct
+    # proxy; other forwarded headers are always ignored.
     try:
+        peer = resolve_request_peer(request)
         enforce_peer_rate_limit(peer, category)
     except PeerRateLimited as exc:
         raise HTTPException(
