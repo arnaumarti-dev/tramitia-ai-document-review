@@ -4,8 +4,10 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 from types import SimpleNamespace
 
@@ -188,6 +190,37 @@ class BoundedStreamingWorkerTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
         self.assertEqual(json.loads(result.stdout)["text"], "ok")
+
+    @unittest.skipUnless(os.name == "posix", "Process groups are POSIX-only")
+    def test_orphaned_child_cannot_survive_after_worker_leader_exits(self):
+        """An orphan inheriting stdout must not evade wall-clock termination."""
+        with tempfile.TemporaryDirectory(prefix="tramitia-pdf-children-") as folder:
+            marker = str(Path(folder) / "orphan-lived.txt")
+            orphan_code = (
+                "import pathlib,sys,time;"
+                "time.sleep(1.2);"
+                "pathlib.Path(sys.argv[1]).write_text('escaped')"
+            )
+            leader_code = (
+                "import subprocess,sys;"
+                "subprocess.Popen("
+                f"[sys.executable,'-I','-c',{orphan_code!r},{marker!r}],"
+                "stdin=subprocess.DEVNULL,stdout=sys.stdout,"
+                "stderr=subprocess.DEVNULL);"
+                "sys.exit(0)"
+            )
+            with patch("app.pdf_processing.MAX_WORKER_SECONDS", 0.3):
+                with self.assertRaises(PdfProcessingError) as ctx:
+                    _run_bounded_worker(
+                        [sys.executable, "-I", "-c", leader_code],
+                        b"fictional", _minimal_environment(),
+                    )
+            self.assertEqual(ctx.exception.status_code, 422)
+            time.sleep(1.4)
+            self.assertFalse(
+                Path(marker).exists(),
+                "An orphaned PDF worker child survived its supervisor",
+            )
 
     def test_nonzero_exit_produces_a_controlled_pdf_error(self):
         with patch("app.pdf_processing._worker_launch", return_value=(
