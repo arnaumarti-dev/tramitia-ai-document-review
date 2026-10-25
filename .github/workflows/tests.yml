@@ -189,6 +189,7 @@ jobs:
               POSTGRES_DB="$POSTGRES_DB" POSTGRES_USER="$POSTGRES_USER" \
               POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
               TRAMITIA_JWT_SECRET="$TRAMITIA_JWT_SECRET" \
+              TRAMITIA_DEPLOYMENT_PROFILE=isolated \
               TRAMITIA_PDF_WORKER_BACKEND=broker \
               TRAMITIA_BROKER_SOCKET="$TRAMITIA_BROKER_SOCKET" \
               "$(command -v python)" -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-proxy-headers --log-level warning > /tmp/tramitia-e2e-uvicorn.log 2>&1
