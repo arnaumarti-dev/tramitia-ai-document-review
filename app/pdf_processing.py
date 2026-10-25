@@ -9,11 +9,13 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import socket
 import struct
 import subprocess
 import sys
 import threading
+import time
 
 MAX_WORKER_SECONDS = 15
 MAX_WORKER_STDOUT_BYTES = 3_000_000
@@ -131,6 +133,114 @@ def _broker_request(data: bytes, max_pages: int, max_chars: int) -> bytes:
         raise PdfProcessingError(422, "Respuesta del broker PDF no válida.") from exc
 
 
+def _run_bounded_worker(
+    command: list[str], data: bytes, environment: dict[str, str],
+) -> subprocess.CompletedProcess:
+    """Read at most MAX_WORKER_STDOUT_BYTES + 1 bytes, even for a hostile child.
+
+    A feeder and a bounded reader run concurrently so a child that writes
+    stdout before consuming stdin cannot deadlock the caller. The deadline
+    covers writing stdin, reading stdout and process exit, not merely CPU.
+    """
+    try:
+        child = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=environment,
+            start_new_session=(os.name == "posix"),
+        )
+    except OSError as exc:
+        raise PdfProcessingError(
+            503, "El servicio de análisis de PDF no está disponible."
+        ) from exc
+
+    deadline = time.monotonic() + MAX_WORKER_SECONDS
+    chunks: list[bytes] = []
+    read_errors: list[Exception] = []
+    write_errors: list[Exception] = []
+
+    def _feed() -> None:
+        try:
+            child.stdin.write(data)
+            child.stdin.flush()
+        except (OSError, ValueError) as exc:
+            write_errors.append(exc)
+        finally:
+            try:
+                child.stdin.close()
+            except OSError:
+                pass
+
+    def _read_capped() -> None:
+        try:
+            # Buffered read(n) returns at most n bytes or earlier at EOF.
+            # Stop as soon as the child crosses the permitted output size.
+            chunks.append(child.stdout.read(MAX_WORKER_STDOUT_BYTES + 1))
+        except (OSError, ValueError) as exc:
+            read_errors.append(exc)
+
+    feeder = threading.Thread(target=_feed, daemon=True)
+    reader = threading.Thread(target=_read_capped, daemon=True)
+    try:
+        feeder.start()
+        reader.start()
+        reader.join(timeout=max(0, deadline - time.monotonic()))
+        if reader.is_alive():
+            raise PdfProcessingError(
+                422, "El análisis del PDF superó el tiempo máximo permitido."
+            )
+        if read_errors or not chunks:
+            raise PdfProcessingError(
+                422, "No se pudo leer la respuesta del analizador PDF."
+            )
+        if len(chunks[0]) > MAX_WORKER_STDOUT_BYTES:
+            raise PdfProcessingError(
+                422, "El analizador PDF superó el límite de salida permitido."
+            )
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(command, MAX_WORKER_SECONDS)
+        code = child.wait(timeout=remaining)
+        feeder.join(timeout=max(0, deadline - time.monotonic()))
+        if feeder.is_alive():
+            raise subprocess.TimeoutExpired(command, MAX_WORKER_SECONDS)
+        if write_errors:
+            raise PdfProcessingError(
+                422, "No se pudo transmitir el PDF al analizador."
+            )
+        return subprocess.CompletedProcess(command, code, stdout=chunks[0])
+    except subprocess.TimeoutExpired as exc:
+        raise PdfProcessingError(
+            422, "El análisis del PDF superó el tiempo máximo permitido."
+        ) from exc
+    finally:
+        # Kill and reap on overflow, timeout or protocol errors. Killing the
+        # private process group also stops local descendants where supported.
+        if child.poll() is None:
+            try:
+                if os.name == "posix":
+                    os.killpg(child.pid, signal.SIGKILL)
+                else:
+                    child.kill()
+            except ProcessLookupError:
+                pass
+            except OSError:
+                child.kill()
+        try:
+            child.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait(timeout=2)
+        feeder.join(timeout=1)
+        reader.join(timeout=1)
+        child.stdout.close()
+        if child.stdin and not feeder.is_alive() and not child.stdin.closed:
+            child.stdin.close()
+
+
 def _parse_pdf_document_unlocked(
     data: bytes,
     *,
@@ -144,24 +254,7 @@ def _parse_pdf_document_unlocked(
         response = _broker_request(data, max_pages, max_chars)
     else:
         command, environment = _worker_launch(max_pages, max_chars)
-        try:
-            completed = subprocess.run(
-                command,
-                input=data,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                timeout=MAX_WORKER_SECONDS,
-                env=environment,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise PdfProcessingError(
-                422, "El análisis del PDF superó el tiempo máximo permitido."
-            ) from exc
-        except OSError as exc:
-            raise PdfProcessingError(
-                503, "El servicio de análisis de PDF no está disponible."
-            ) from exc
+        completed = _run_bounded_worker(command, data, environment)
 
         if completed.returncode != 0 or len(completed.stdout) > MAX_WORKER_STDOUT_BYTES:
             raise PdfProcessingError(
