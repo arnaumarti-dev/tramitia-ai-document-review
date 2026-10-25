@@ -453,17 +453,21 @@ and a missing broker fails with HTTP 503, **without falling back to
 unrestricted PDF parsing**.
 
 The CI workflow verifies the broker protocol and exercises the end-to-end
-Chromium journey with broker → Docker container. **CI creates two dedicated
-OS identities**: `tramitia-ci-web` (no Docker group/daemon access) and
-`tramitia-ci-broker` (Docker group membership, but no application credentials).
-A dedicated Unix group owns the broker socket (mode `0660`), allowing
-the API to send PDF jobs without acquiring Docker privileges. CI verifies
-the Unix socket owner, group, and permissions, tests a real PDF extraction
-under the web identity, and runs the complete Chromium browser journey
-using these separate accounts. The broker starts with a clean allowlisted
-environment: it does not receive JWT or PostgreSQL credentials.
-Production must reproduce this account separation, socket ownership and
-isolation policies with a reviewed deployment configuration.
+Chromium journey with broker → Docker container. **In CI the trusted GitHub
+runner account runs the broker**, with Docker access but without forwarded
+JWT or PostgreSQL credentials. FastAPI runs as a **separate unprivileged
+OS account** (`tramitia-ci-web`) with no access to the Docker socket.
+The runner applies restrictive socket ownership/group and mode `0660`,
+allowing the API to submit PDF jobs without acquiring Docker privileges.
+CI checks socket permissions, confirms the web account cannot read the
+Docker socket, processes a fictional PDF under that web identity and runs
+the full browser journey across the two identities.
+
+**Production must not use an all-purpose CI runner as its broker identity.**
+Deploy the broker under its own managed service identity or preferably on
+a separate dedicated host/VM, with a narrowly permissioned Unix socket
+and isolated Docker daemon. The end-to-end CI test demonstrates the
+account-access boundary in the CI setup, not production security.
 
 **Residual risks:** The broker itself holds Docker host privileges, and
 a compromised broker may still control the host. Production requires
