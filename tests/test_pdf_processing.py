@@ -145,6 +145,9 @@ class PDFWorkerRouteFailures(unittest.TestCase):
         role = patch("app.auth.get_membership_role", return_value="owner")
         role.start()
         self.addCleanup(role.stop)
+        quota = patch("app.main.consume_analysis_quota")
+        quota.start()
+        self.addCleanup(quota.stop)
 
     def test_worker_timeout_or_crash_never_saves_analysis(self):
         cases = [(422, "tiempo"), (503, "no está disponible")]
