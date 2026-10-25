@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import grp
 from pathlib import Path
 import socketserver
 import stat
@@ -146,6 +145,8 @@ def create_server(socket_path: str) -> PdfBrokerServer:
         if group and numeric_gid:
             raise RuntimeError("Configure either socket GROUP or GID, not both")
         if group:
+            # grp is POSIX-only; keep Windows development imports working.
+            import grp
             if not group.replace("-", "").replace("_", "").isalnum():
                 raise RuntimeError("Invalid broker socket group name")
             gid = grp.getgrnam(group).gr_gid
