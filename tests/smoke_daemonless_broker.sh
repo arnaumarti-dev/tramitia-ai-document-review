@@ -52,7 +52,21 @@ for attempt in $(seq 1 35); do
   fi
   sleep 1
 done
-test -S "$broker_socket" || { docker logs "$container"; exit 1; }
+if ! test -S "$broker_socket"; then
+  echo "Daemonless broker did not publish its Unix socket" >&2
+  stat -c '%A %u:%g %n' "$socket_dir" || true
+  ls -la "$socket_dir" || true
+  docker inspect -f 'status={{.State.Status}} mounts={{json .Mounts}}' "$container" || true
+  docker exec "$container" sh -c '
+    id
+    ls -lda /run/tramitia || true
+    ls -la /run/tramitia || true
+    ps aux || true
+    test -S /run/tramitia/pdf-broker.sock && echo IN_CONTAINER_SOCKET_PRESENT
+  ' || true
+  docker logs "$container" || true
+  exit 1
+fi
 test "$(stat -c %a "$broker_socket")" = 660
 test "$(stat -c %u "$broker_socket")" = 65534
 test "$(stat -c %g "$broker_socket")" = "$gid"
