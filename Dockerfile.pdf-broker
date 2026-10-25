@@ -1,0 +1,18 @@
+# Pre-started PDF broker service: the application and broker cannot
+# control Docker at runtime. Docker is only used by an operator to start
+# this container. No HTTP port, internet access, database or JWT secrets.
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    TRAMITIA_PDF_BROKER_DAEMONLESS=1 \
+    TRAMITIA_PDF_WORKER_BACKEND=subprocess \
+    TRAMITIA_BROKER_SOCKET=/run/tramitia/pdf-broker.sock
+
+RUN python -m pip install --no-cache-dir --disable-pip-version-check "pypdf==6.21.2"
+WORKDIR /opt/tramitia
+
+COPY --chown=65534:65534 app/__init__.py app/pdf_broker.py app/pdf_processing.py app/pdf_worker.py /opt/tramitia/app/
+
+USER 65534:65534
+ENTRYPOINT ["python", "-m", "app.pdf_broker"]
