@@ -563,6 +563,45 @@ Para probarlo, ejecutar `alembic upgrade head` y la suite de PostgreSQL
 en una base **efímera**. No aplicar estos cambios a una base productiva
 sin plan de migración y revisión de seguridad.
 
+## Request admission by connection IP (development)
+
+FastAPI now applies a second PostgreSQL-backed admission check to
+three public-facing operations. The provisional quotas are:
+
+| Request | Window | Max per connection IP |
+| --- | --- | ---: |
+| `POST /auth/login` | 15-minute UTC window | 60 |
+| `POST /auth/invitations/accept` | 15-minute UTC window | 30 |
+| `POST /analyze` (authenticated) | 1-hour UTC window | 60 |
+
+Only the server-provided ASGI connection address is counted: **never use
+client-supplied `X-Forwarded-For`, `Forwarded` or `X-Real-IP` directly.**
+PostgreSQL atomically increments a category-specific counter shared by all
+API processes. Limit violations return HTTP **429** with `Retry-After`;
+a database failure returns HTTP **503** and stops the expensive work.
+The existing *per-user* and *per-gestoría* quotas remain independent.
+Accepted attempts count even when login, invitation or PDF analysis fails.
+
+Raw IPs are not stored. Counter keys use HMAC-SHA256 with the configured
+JWT secret, a fixed domain separator and category. Run
+`python -m scripts.prune_peer_rate_counters` **daily** from a
+separate trusted scheduler to delete pseudonymous keys whose last
+window is older than 48 hours. The purge is not automatically scheduled
+by the application. Treat those hashes as pseudonymous personal data,
+protect database access, and include them in the privacy/retention review.
+
+**Critical reverse-proxy limitation:** Uvicorn may rewrite the ASGI
+connection address when `--proxy-headers` is enabled. Start this
+development configuration with `uvicorn app.main:app --no-proxy-headers`
+unless a separately audited trust arrangement is in place. Behind a
+reverse proxy this makes all users share the proxy's apparent address
+and *may block legitimate traffic*; enforce genuine client-IP admission
+at the trusted **ingress**, where forwarding headers are overwritten and
+validated, before exposing the service publicly. This app-level check is
+only defense in depth and does not mitigate DDoS, connection floods,
+malicious reverse proxies or multi-layer IP spoofing. The limits
+may be adjusted after load tests and shared-NAT analysis.
+
 ## Security and production status
 
 **Development-only; do not upload real client documents.** The repository
