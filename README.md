@@ -30,7 +30,7 @@ TramitIA is a **local MVP** for reviewing administrative PDF documents, focused 
 High-level flow:
 
 1. User uploads a PDF from the frontend dashboard.
-2. FastAPI backend reads the file and extracts text with `pypdf`.
+2. FastAPI accepts the bounded upload and delegates `pypdf` extraction to a resource-capped worker (via the broker in isolated mode).
 3. Validation rules are applied to the extracted text (IDs, email, phone, signature/date/address/request/declaration signals, etc.).
 4. The app calculates a score and risk status.
 5. Analysis is persisted in PostgreSQL with a verified organization ID (`analyses` table).
@@ -194,8 +194,8 @@ Base URL: `http://127.0.0.1:8000`
 - `POST /analyze`
   - Multipart upload (`file`) of a PDF.
   - Returns summarized analysis result.
-  - HTTP 400: empty, unreadable or encrypted PDF; HTTP 413: file exceeds 20 MiB.
-  - Parsing and database work run in a worker thread. The size cap bounds the parser input, not PDF decompression or the multipart upload itself.
+  - HTTP 400: empty, unreadable or encrypted PDF, or invalid Content-Length; HTTP 413: file exceeds 20 MiB or multipart request exceeds 21 MiB.
+  - Parsing and database work run outside the async event loop. PDF extraction runs in a bounded child process or isolated broker; request-body size is additionally checked at ASGI level. PDF decompression and production ingress still need defense in depth.
 
 - `GET /analyses`
   - Paginated list of analyses.
@@ -375,8 +375,18 @@ opens a hostile PDF or extracts an individual page.** They are preliminary
 input restrictions, not a security sandbox. Before any production rollout,
 perform PDF analysis in an isolated, resource-capped worker with CPU,
 memory, process time and decompression limits, plus malware policies.
-The multipart request may also be buffered before the endpoint's 20 MiB
-file check; enforce a **whole-request size limit** at the reverse proxy.
+The application additionally caps the **complete** `POST /analyze`
+multipart HTTP body at **21 MiB** via an outer ASGI receive guard,
+**before** FastAPI/Starlette multipart parsing. It rejects an oversized
+`Content-Length` immediately and counts actual bytes as streaming/chunked
+content arrives, returning HTTP 413; invalid or conflicting
+`Content-Length` values receive HTTP 400. This permits a small amount of
+multipart overhead above the 20 MiB PDF limit. The guard does not impose
+a size ceiling on other endpoints.
+
+**Production still requires a whole-request limit at the reverse proxy**
+and a proper concurrency/rate policy to protect the ASGI server and
+networking stack before the request reaches Python.
 No real customer documents should be used until these protections and
 privacy controls have been assessed.
 
