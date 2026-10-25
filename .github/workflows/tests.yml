@@ -73,15 +73,35 @@ jobs:
           TRAMITIA_PDF_WORKER_IMAGE: tramitia-pdf-worker:ci
         run: |
           set -euo pipefail
+          # A dedicated OS identity owns the web API and MUST NOT belong to
+          # docker/runner groups; only the trusted broker may access Docker.
+          sudo groupadd --system tramitia-ci-web
+          sudo useradd --system --create-home --gid tramitia-ci-web \
+            --shell /usr/sbin/nologin tramitia-ci-web
+          if id -nG tramitia-ci-web | tr ' ' '\\n' | grep -qx docker; then
+            echo "SECURITY FAILURE: Web API identity has Docker membership" >&2
+            exit 1
+          fi
+          test -S /var/run/docker.sock
+          if sudo -u tramitia-ci-web test -r /var/run/docker.sock; then
+            echo "SECURITY FAILURE: Web API can access the Docker socket" >&2
+            exit 1
+          fi
           broker_dir=$(mktemp -d)
-          chmod 700 "$broker_dir"
+          chmod 750 "$broker_dir"
+          sudo chgrp tramitia-ci-web "$broker_dir"
           export TRAMITIA_BROKER_SOCKET="$broker_dir/pdf.sock"
-          # Broker alone owns Docker API calls; FastAPI uses only AF_UNIX.
-          TRAMITIA_PDF_WORKER_BACKEND=container python -m app.pdf_broker > /tmp/tramitia-broker.log 2>&1 &
+          broker_gid=$(getent group tramitia-ci-web | cut -d: -f3)
+          # Broker receives NO application JWT/database environment variables.
+          # It alone has Docker access, and exposes a constrained Unix socket.
+          env -i PATH="$PATH" HOME="$HOME" \
+            TRAMITIA_PDF_WORKER_BACKEND=container \
+            TRAMITIA_PDF_WORKER_IMAGE=tramitia-pdf-worker:ci \
+            TRAMITIA_BROKER_SOCKET="$TRAMITIA_BROKER_SOCKET" \
+            TRAMITIA_BROKER_SOCKET_GID="$broker_gid" \
+            "$(command -v python)" -m app.pdf_broker > /tmp/tramitia-broker.log 2>&1 &
           broker_pid=$!
-          uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level warning > /tmp/tramitia-e2e-uvicorn.log 2>&1 &
-          server_pid=$!
-          trap 'kill "$server_pid" "$broker_pid" 2>/dev/null || true; rm -f "$TRAMITIA_BROKER_SOCKET"; rmdir "$broker_dir" 2>/dev/null || true' EXIT
+          trap 'kill "$broker_pid" "$server_pid" 2>/dev/null || true; sudo pkill -u tramitia-ci-web -f "uvicorn app.main:app" 2>/dev/null || true; rm -f "$TRAMITIA_BROKER_SOCKET"; rmdir "$broker_dir" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 60); do
             if [ -S "$TRAMITIA_BROKER_SOCKET" ]; then
               break
@@ -89,6 +109,24 @@ jobs:
             sleep 1
           done
           test -S "$TRAMITIA_BROKER_SOCKET"
+          test "$(stat -c %a "$TRAMITIA_BROKER_SOCKET")" = "660"
+          # Verify real permissioned PDF processing as the unprivileged web
+          # identity, while the web cannot access the Docker control plane.
+          sudo -u tramitia-ci-web -- env PATH="$PATH" \
+            TRAMITIA_PDF_WORKER_BACKEND=broker \
+            TRAMITIA_BROKER_SOCKET="$TRAMITIA_BROKER_SOCKET" \
+            "$(command -v python)" -c 'from app.pdf_processing import parse_pdf_document; from scripts.generate_demo_pdf import make_demo_pdf; text, pages = parse_pdf_document(make_demo_pdf()); assert pages == 1 and "Solicitud ficticia" in text'
+          # Run actual FastAPI under the unprivileged account: JWT and
+          # database credentials are scoped to the API, not the broker.
+          sudo -u tramitia-ci-web -- env PATH="$PATH" \
+            POSTGRES_HOST="$POSTGRES_HOST" POSTGRES_PORT="$POSTGRES_PORT" \
+            POSTGRES_DB="$POSTGRES_DB" POSTGRES_USER="$POSTGRES_USER" \
+            POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+            TRAMITIA_JWT_SECRET="$TRAMITIA_JWT_SECRET" \
+            TRAMITIA_PDF_WORKER_BACKEND=broker \
+            TRAMITIA_BROKER_SOCKET="$TRAMITIA_BROKER_SOCKET" \
+            "$(command -v python)" -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level warning > /tmp/tramitia-e2e-uvicorn.log 2>&1 &
+          server_pid=$!
           for attempt in $(seq 1 60); do
             if curl --silent --show-error --fail http://127.0.0.1:8000/health > /dev/null; then
               break
