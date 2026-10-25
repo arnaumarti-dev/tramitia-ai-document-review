@@ -531,6 +531,38 @@ identity, seccomp/AppArmor policies, image digest pinning, audit logs,
 whole-request upload and memory caps, queue quotas and secure retention.
 Do not expose the current application to client documents.
 
+## Análisis PDF: cuotas por usuario y gestoría (desarrollo)
+
+Las solicitudes autenticadas a `POST /analyze` tienen dos cuotas
+persistentes en PostgreSQL: **20 intentos por usuario y hora** y
+**100 intentos por gestoría y hora**. Una solicitud debe tener
+capacidad en ambas cuotas; en caso contrario devuelve **HTTP 429**
+con la cabecera `Retry-After` (segundos hasta el siguiente límite horario
+en UTC). El frontend podrá informar del bloqueo sin lanzar otro analizador.
+
+- Los contadores se reservan juntos en **una transacción de PostgreSQL**,
+  mediante actualizaciones atómicas que aplican límites incluso cuando
+  varias instancias de FastAPI reciben solicitudes simultáneas. Si se
+  supera la cuota de la gestoría, la reserva del usuario también se revierte.
+- Se cobra un intento una vez autenticado y validado el encabezado/nombre
+  del PDF, **antes de ejecutarlo**, aunque posteriormente el PDF resulte
+  ilegible. Así se evita agotar los recursos del broker reenviando PDFs
+  maliciosos. Las peticiones sin autorización o sin cabecera PDF válida
+  no consumen cuota.
+- Los contadores se reinician al principio de cada hora UTC; son
+  **ventanas fijas**, por lo que puede existir una ráfaga en los límites
+  horarios. Cada tabla mantiene una sola fila por usuario o gestoría,
+  con eliminación automática por `ON DELETE CASCADE`.
+- Si el servicio de cuotas PostgreSQL no funciona, el análisis **falla
+  cerrado con HTTP 503**; nunca se permite un PDF sin reserva de cuota.
+- Esto no sustituye un control de tasas de entrada por IP, protección de
+  DDoS a nivel proxy, presupuesto de concurrencia compartido entre
+  varios brokers, límites de consumo por plan ni alertas operativas.
+
+Para probarlo, ejecutar `alembic upgrade head` y la suite de PostgreSQL
+en una base **efímera**. No aplicar estos cambios a una base productiva
+sin plan de migración y revisión de seguridad.
+
 ## Security and production status
 
 **Development-only; do not upload real client documents.** The repository
