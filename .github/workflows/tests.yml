@@ -106,34 +106,26 @@ jobs:
             echo "SECURITY TEST SETUP FAILURE: dedicated broker cannot access Docker" >&2
             exit 1
           fi
-          # Validate module import, Unix socket creation and ownership under
-          # the real broker UID before starting a long-lived service.
-          (
-            cd "$stage_dir"
-            sudo -u tramitia-ci-broker -- env -i PATH="$PATH" \
-              HOME=/home/tramitia-ci-broker \
-              TRAMITIA_BROKER_SOCKET="$TRAMITIA_BROKER_SOCKET" \
-              TRAMITIA_BROKER_SOCKET_GID="$broker_gid" \
-              "$(command -v python)" -c 'import os; from pathlib import Path; from app.pdf_broker import create_server; path=os.environ["TRAMITIA_BROKER_SOCKET"]; server=create_server(path); print("Broker socket startup smoke test OK"); server.server_close(); Path(path).unlink()'
-          )
           # Broker has its own UID and Docker access; it receives no JWT,
           # database password, cloud credentials or user-supplied commands.
           (
             cd "$stage_dir"
-            sudo -u tramitia-ci-broker -- env -i PATH="$PATH" \
-              HOME=/home/tramitia-ci-broker \
+            # setpriv avoids sudo/PAM startup behavior inside background jobs.
+            setpriv --reuid="$(id -u tramitia-ci-broker)" \
+              --regid="$(id -g tramitia-ci-broker)" --init-groups \
+              env -i PATH="$PATH" HOME=/home/tramitia-ci-broker \
+              PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
               TRAMITIA_PDF_WORKER_BACKEND=container \
               TRAMITIA_PDF_WORKER_IMAGE=tramitia-pdf-worker:ci \
               TRAMITIA_BROKER_SOCKET="$TRAMITIA_BROKER_SOCKET" \
               TRAMITIA_BROKER_SOCKET_GID="$broker_gid" \
-              "$(command -v python)" -m app.pdf_broker > /tmp/tramitia-broker.log 2>&1
+              "$(command -v python)" -u -m app.pdf_broker > /tmp/tramitia-broker.log 2>&1
           ) &
           broker_pid=$!
           trap 'kill "$broker_pid" "${server_pid:-}" 2>/dev/null || true; sudo pkill -u tramitia-ci-web -f "uvicorn app.main:app" 2>/dev/null || true; sudo pkill -u tramitia-ci-broker -f "app.pdf_broker" 2>/dev/null || true; sudo rm -f "$TRAMITIA_BROKER_SOCKET"; sudo rmdir "$broker_dir" 2>/dev/null || true; sudo rm -rf "$stage_dir"' EXIT
-          # Starting a dedicated OS identity is unusually slow on some
-          # hosted CI runners. Bound startup independently of the 15s PDF
-          # document-processing timeout; this is NOT a longer parser timeout.
-          for attempt in $(seq 1 180); do
+          # Fail promptly if broker cannot bind its local Unix socket.
+          # This startup budget is separate from the 15s PDF parse timeout.
+          for attempt in $(seq 1 45); do
             if [ -S "$TRAMITIA_BROKER_SOCKET" ]; then
               break
             fi
@@ -153,11 +145,21 @@ jobs:
           test "$(stat -c %a "$TRAMITIA_BROKER_SOCKET")" = "660"
           test "$(stat -c %U "$TRAMITIA_BROKER_SOCKET")" = "tramitia-ci-broker"
           test "$(stat -c %G "$TRAMITIA_BROKER_SOCKET")" = "tramitia-ci-web"
+          echo "PDF broker socket bound with correct owner, group and permissions"
+          # The web account must have no direct access to the Docker control plane.
+          if setpriv --reuid="$(id -u tramitia-ci-web)" \
+            --regid="$(id -g tramitia-ci-web)" --init-groups \
+            test -r /var/run/docker.sock; then
+            echo "SECURITY FAILURE: web account can read Docker socket" >&2
+            exit 1
+          fi
           # Verify real permissioned PDF processing as the unprivileged web
           # identity, while the web cannot access the Docker control plane.
           (
             cd "$stage_dir"
-            sudo -u tramitia-ci-web -- env PATH="$PATH" \
+            setpriv --reuid="$(id -u tramitia-ci-web)" \
+              --regid="$(id -g tramitia-ci-web)" --init-groups \
+              env -i PATH="$PATH" PYTHONDONTWRITEBYTECODE=1 \
               TRAMITIA_PDF_WORKER_BACKEND=broker \
               TRAMITIA_BROKER_SOCKET="$TRAMITIA_BROKER_SOCKET" \
               "$(command -v python)" -c 'from app.pdf_processing import parse_pdf_document; from scripts.generate_demo_pdf import make_demo_pdf; text, pages = parse_pdf_document(make_demo_pdf()); assert pages == 1 and "Solicitud ficticia" in text'
@@ -166,7 +168,9 @@ jobs:
           # database credentials are scoped to the API, not the broker.
           (
             cd "$stage_dir"
-            sudo -u tramitia-ci-web -- env PATH="$PATH" \
+            setpriv --reuid="$(id -u tramitia-ci-web)" \
+              --regid="$(id -g tramitia-ci-web)" --init-groups \
+              env -i PATH="$PATH" PYTHONDONTWRITEBYTECODE=1 \
               POSTGRES_HOST="$POSTGRES_HOST" POSTGRES_PORT="$POSTGRES_PORT" \
               POSTGRES_DB="$POSTGRES_DB" POSTGRES_USER="$POSTGRES_USER" \
               POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
