@@ -456,6 +456,15 @@ security and GDPR requirements.
 
 The fixed-size protocol checks message sizes (20 MiB input), pages
 (1–50), characters (1–200,000), and returns bounded JSON (3 MB).
+The broker accepts at most **one active PDF request per broker process**
+across all connected FastAPI workers. Concurrent requests receive an
+immediate fixed `busy` response (HTTP 503 from FastAPI), without starting
+more Docker jobs or saving an analysis. The Unix socket has an acceptance
+backlog of 4; a total receive deadline of **10 seconds** prevents slow
+clients from holding the broker's single slot indefinitely. This is
+**per broker process**, not a global quota across independent broker
+replicas. Proper ingress/tenant-aware admission control and distributed
+quotas are still required before production.
 The privileged broker supervises the same ephemeral Docker worker with
 no network, no mounts, restricted Linux capabilities and memory/CPU caps.
 Invalid requests are discarded, failures return limited error categories,
