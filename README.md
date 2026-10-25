@@ -453,14 +453,16 @@ and a missing broker fails with HTTP 503, **without falling back to
 unrestricted PDF parsing**.
 
 The CI workflow verifies the broker protocol and exercises the end-to-end
-Chromium journey with broker → Docker container. **CI runs FastAPI as a
-dedicated unprivileged OS user (`tramitia-ci-web`) and the broker under the
-runner identity**. It asserts that the web user cannot access the local
-Docker socket, but can access only its group-permissioned broker socket,
-then runs a real PDF extraction and the complete browser journey.
-It also starts the broker with a clean, allowlisted environment so the
-JWT secret and PostgreSQL password are not available to that service.
-Production must reproduce the account separation, socket ownership and
+Chromium journey with broker → Docker container. **CI creates two dedicated
+OS identities**: `tramitia-ci-web` (no Docker group/daemon access) and
+`tramitia-ci-broker` (Docker group membership, but no application credentials).
+A dedicated Unix group owns the broker socket (mode `0660`), allowing
+the API to send PDF jobs without acquiring Docker privileges. CI verifies
+the Unix socket owner, group, and permissions, tests a real PDF extraction
+under the web identity, and runs the complete Chromium browser journey
+using these separate accounts. The broker starts with a clean allowlisted
+environment: it does not receive JWT or PostgreSQL credentials.
+Production must reproduce this account separation, socket ownership and
 isolation policies with a reviewed deployment configuration.
 
 **Residual risks:** The broker itself holds Docker host privileges, and
