@@ -50,7 +50,7 @@ class BrokerProtocolTests(unittest.TestCase):
     def test_good_pdf_protocol_returns_text_without_docker_in_api(self):
         sample = make_demo_pdf()
         with patch("app.pdf_broker.parse_pdf_document", return_value=("Texto ficticio", 1)) as parser, patch(
-            "app.pdf_processing.subprocess.run"
+            "app.pdf_processing._run_bounded_worker"
         ) as forbidden:
             self.assertEqual(parse_pdf_document(sample), ("Texto ficticio", 1))
         parser.assert_called_once_with(sample, max_pages=50, max_chars=200_000)
@@ -133,7 +133,7 @@ class BrokerProtocolTests(unittest.TestCase):
         with patch.dict(os.environ, {
             "TRAMITIA_PDF_WORKER_BACKEND": "broker",
             "TRAMITIA_BROKER_SOCKET": self.path + ".missing",
-        }), patch("app.pdf_processing.subprocess.run") as spawn:
+        }), patch("app.pdf_processing._run_bounded_worker") as spawn:
             with self.assertRaises(PdfProcessingError) as ctx:
                 parse_pdf_document(make_demo_pdf())
         self.assertEqual(ctx.exception.status_code, 503)
