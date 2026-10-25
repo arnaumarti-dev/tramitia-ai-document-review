@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import socket
 import stat
+import sys
 
 
 def validate_web_deployment() -> None:
@@ -19,7 +20,7 @@ def validate_web_deployment() -> None:
     if profile != "isolated":
         raise RuntimeError("Unknown TramitIA deployment profile")
 
-    if os.name != "posix" or not hasattr(os, "geteuid"):
+    if sys.platform != "linux" or not hasattr(os, "geteuid"):
         raise RuntimeError("Isolated deployments require Linux/POSIX")
     if os.geteuid() == 0:
         raise RuntimeError("FastAPI must never start as root")
@@ -29,7 +30,7 @@ def validate_web_deployment() -> None:
     # Docker group permissions or root-equivalent access in the web account
     # would nullify the separation from the privileged broker.
     docker_sock = Path("/var/run/docker.sock")
-    if docker_sock.exists() and os.access(docker_sock, os.R_OK | os.W_OK):
+    if docker_sock.exists() and os.access(docker_sock, os.W_OK):
         raise RuntimeError("FastAPI account has access to Docker control socket")
 
     socket_path = Path(os.getenv(
