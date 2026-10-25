@@ -61,6 +61,14 @@ jobs:
           TRAMITIA_CONTAINER_PDF_TEST: "1"
         run: python -m unittest discover -s tests -p test_pdf_container.py -v
 
+      - name: Build pre-isolated daemonless PDF broker image
+        run: docker build -f Dockerfile.pdf-broker -t tramitia-pdf-broker:ci .
+      - name: Verify daemonless broker has no Docker, network or credentials
+        run: |
+          set -euo pipefail
+          TRAMITIA_WEB_GID=65534 docker compose -f deploy/pdf-broker.compose.yml config --quiet
+          bash tests/smoke_daemonless_broker.sh
+
       - name: Validate HTTPS NGINX ingress syntax
         run: |
           set -euo pipefail
