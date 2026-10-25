@@ -47,6 +47,10 @@ class UploadTests(unittest.TestCase):
         member = patch("app.auth.get_membership_role", return_value="owner")
         member.start()
         self.addCleanup(member.stop)
+        # Request-limit tests use a separate PostgreSQL integration suite.
+        quota = patch("app.main.consume_analysis_quota")
+        quota.start()
+        self.addCleanup(quota.stop)
 
     def test_invalid_uploads_return_400_without_saving(self):
         for data in (b"", b"not a PDF", b"%PDF-1.7\ntruncated", make_pdf(True)):
@@ -175,7 +179,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
             return 1
 
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", headers=AUTH_HEADERS) as client:
-            with patch("app.auth.get_membership_role", return_value="owner"), patch("app.main.save_analysis", side_effect=save):
+            with patch("app.auth.get_membership_role", return_value="owner"), patch("app.main.consume_analysis_quota"), patch("app.main.save_analysis", side_effect=save):
                 response = await client.post(
                     "/analyze", files={"file": ("ok.pdf", make_pdf(), "application/pdf")}
                 )
