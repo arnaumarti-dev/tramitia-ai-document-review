@@ -16,6 +16,9 @@ from app.staff import (StaffForbidden, StaffConflict, StaffNotFound,
 from app.invitations import create_invitation, accept_invitation, InvalidInvitation
 from app.passwords import change_password, InvalidPassword
 from app.pdf_processing import parse_pdf_document, PdfProcessingError
+from app.analysis_rate_limit import (
+    consume_analysis_quota, AnalysisQuotaExceeded, AnalysisQuotaUnavailable,
+)
 from app.upload_body_limit import UploadBodyLimit
 
 from app.schemas.report import Report
@@ -202,6 +205,23 @@ def analyze(file: UploadFile = File(...), principal: Principal = Depends(current
             status_code=400,
             detail="El nombre del archivo PDF no es válido.",
         )
+
+    # Charge the authenticated user and organization *before* parsing. Two
+    # counters are incremented atomically in PostgreSQL across API instances.
+    # Rejected and invalid requests do not save a report.
+    try:
+        consume_analysis_quota(principal.user_id, principal.organization_id)
+    except AnalysisQuotaExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Has superado el límite de análisis por {exc.scope}.",
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+    except AnalysisQuotaUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="El servicio de control de solicitudes no está disponible.",
+        ) from exc
 
     # The untrusted document is parsed in a separate short-lived process,
     # with Linux CPU/address-space caps and a cross-platform wall timeout.
