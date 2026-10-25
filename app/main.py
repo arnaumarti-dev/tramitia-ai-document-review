@@ -16,6 +16,7 @@ from app.staff import (StaffForbidden, StaffConflict, StaffNotFound,
 from app.invitations import create_invitation, accept_invitation, InvalidInvitation
 from app.passwords import change_password, InvalidPassword
 from app.pdf_processing import parse_pdf_document, PdfProcessingError
+from app.upload_body_limit import UploadBodyLimit
 
 from app.schemas.report import Report
 from app.core.validators import validate_subsidy_application
@@ -284,3 +285,8 @@ def get_analyses(
         status=status,
         document_type=document_type,
     )
+
+
+# Keep the request-size guard OUTSIDE FastAPI's multipart parser and error
+# middleware so an oversized streaming upload gets HTTP 413, not HTTP 500.
+app = UploadBodyLimit(app)
