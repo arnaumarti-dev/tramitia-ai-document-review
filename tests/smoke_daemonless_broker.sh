@@ -42,7 +42,7 @@ docker run --detach --rm --name "$container" \
 
 broker_socket="$socket_dir/pdf-broker.sock"
 for attempt in $(seq 1 35); do
-  if [ -S "$broker_socket" ]; then
+  if sudo test -S "$broker_socket"; then
     break
   fi
   if [ "$(docker inspect -f '{{.State.Running}}' "$container")" != "true" ]; then
@@ -52,10 +52,10 @@ for attempt in $(seq 1 35); do
   fi
   sleep 1
 done
-if ! test -S "$broker_socket"; then
+if ! sudo test -S "$broker_socket"; then
   echo "Daemonless broker did not publish its Unix socket" >&2
-  stat -c '%A %u:%g %n' "$socket_dir" || true
-  ls -la "$socket_dir" || true
+  sudo stat -c '%A %u:%g %n' "$socket_dir" || true
+  sudo ls -la "$socket_dir" || true
   docker inspect -f 'status={{.State.Status}} mounts={{json .Mounts}}' "$container" || true
   docker exec "$container" sh -c '
     id
@@ -67,9 +67,9 @@ if ! test -S "$broker_socket"; then
   docker logs "$container" || true
   exit 1
 fi
-test "$(stat -c %a "$broker_socket")" = 660
-test "$(stat -c %u "$broker_socket")" = 65534
-test "$(stat -c %g "$broker_socket")" = "$gid"
+test "$(sudo stat -c %a "$broker_socket")" = 660
+test "$(sudo stat -c %u "$broker_socket")" = 65534
+test "$(sudo stat -c %g "$broker_socket")" = "$gid"
 
 # Validate its Linux container boundary *from inside the running broker*.
 docker exec "$container" python -c '
