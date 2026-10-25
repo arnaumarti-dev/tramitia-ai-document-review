@@ -6,11 +6,14 @@ import socket
 import struct
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
-from app.pdf_broker import create_server
-from app.pdf_processing import PdfProcessingError, parse_pdf_document
+from app.pdf_broker import _read_exact, create_server
+from app.pdf_processing import (
+    PdfProcessingError, _broker_request, parse_pdf_document,
+)
 from scripts.generate_demo_pdf import make_demo_pdf
 
 
@@ -70,6 +73,61 @@ class BrokerProtocolTests(unittest.TestCase):
                 sock.shutdown(socket.SHUT_WR)
                 self.assertEqual(sock.recv(1), b"")
             forbidden.assert_not_called()
+
+    def test_busy_broker_rejects_second_client_and_recovers(self):
+        """Global broker slot works even when different APIs connect."""
+        entered = threading.Event()
+        release = threading.Event()
+        first = {}
+        sample = make_demo_pdf()
+
+        def slow_worker(data, *, max_pages, max_chars):
+            entered.set()
+            if not release.wait(timeout=5):
+                raise RuntimeError("Test worker release timed out")
+            return ("PDF ficticio", 1)
+
+        def first_client():
+            try:
+                first["reply"] = json.loads(
+                    _broker_request(sample, 50, 200_000)
+                )
+            except Exception as exc:
+                first["exception"] = exc
+
+        with patch("app.pdf_broker.parse_pdf_document", side_effect=slow_worker) as parser:
+            job = threading.Thread(target=first_client, daemon=True)
+            job.start()
+            try:
+                self.assertTrue(entered.wait(timeout=3))
+                started = time.monotonic()
+                with self.assertRaises(PdfProcessingError) as ctx:
+                    parse_pdf_document(sample)
+                self.assertEqual(ctx.exception.status_code, 503)
+                self.assertIn("ocupado", ctx.exception.message)
+                self.assertLess(time.monotonic() - started, 2.0)
+                parser.assert_called_once()
+            finally:
+                release.set()
+                job.join(timeout=5)
+            self.assertFalse(job.is_alive(), "Worker socket did not return")
+            self.assertNotIn("exception", first, first.get("exception"))
+            self.assertEqual(first["reply"], {"text": "PDF ficticio", "pages": 1})
+            self.assertEqual(
+                parse_pdf_document(sample), ("PDF ficticio", 1)
+            )
+            self.assertEqual(parser.call_count, 2)
+
+    def test_receive_deadline_expires_without_waiting_for_more_pdf_bytes(self):
+        class Stream:
+            def recv(self, count):
+                raise AssertionError("Expired request should not receive data")
+
+            def settimeout(self, timeout):
+                raise AssertionError("Expired request should not reset timeout")
+
+        with self.assertRaises(TimeoutError):
+            _read_exact(Stream(), 1, deadline=time.monotonic() - 0.01)
 
     def test_missing_broker_fails_closed_not_fallback_docker(self):
         with patch.dict(os.environ, {
