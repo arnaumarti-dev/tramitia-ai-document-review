@@ -78,8 +78,6 @@ jobs:
           sudo groupadd --system tramitia-ci-web
           sudo useradd --system --create-home --gid tramitia-ci-web \
             --shell /usr/sbin/nologin tramitia-ci-web
-          sudo useradd --system --create-home --gid tramitia-ci-web \
-            --groups docker --shell /usr/sbin/nologin tramitia-ci-broker
           if id -nG tramitia-ci-web | grep -qw docker; then
             echo "SECURITY FAILURE: Web API identity has Docker membership" >&2
             exit 1
@@ -98,32 +96,29 @@ jobs:
           sudo chmod -R u=rwX,go=rX "$stage_dir"
           broker_dir=$(mktemp -d)
           chmod 750 "$broker_dir"
-          sudo chown tramitia-ci-broker:tramitia-ci-web "$broker_dir"
+          sudo chown "$(id -un)":tramitia-ci-web "$broker_dir"
           export TRAMITIA_BROKER_SOCKET="$broker_dir/pdf.sock"
           broker_gid=$(getent group tramitia-ci-web | cut -d: -f3)
           test -r /var/run/docker.sock
-          if ! sudo -u tramitia-ci-broker test -r /var/run/docker.sock; then
-            echo "SECURITY TEST SETUP FAILURE: dedicated broker cannot access Docker" >&2
+          if ! test -r /var/run/docker.sock; then
+            echo "SECURITY TEST SETUP FAILURE: runner broker cannot access Docker" >&2
             exit 1
           fi
-          # Broker has its own UID and Docker access; it receives no JWT,
-          # database password, cloud credentials or user-supplied commands.
+          # CI's runner is the trusted broker identity; the API web user
+          # remains a separate account with no access to the Docker socket.
+          # The broker receives no JWT/database credentials.
           (
             cd "$stage_dir"
-            # setpriv avoids sudo/PAM startup behavior inside background jobs.
-            sudo -n setpriv --reuid="$(id -u tramitia-ci-broker)" \
-              --regid="$(id -g tramitia-ci-broker)" --init-groups \
-              env -i PATH="$PATH" HOME=/home/tramitia-ci-broker \
+            env -i PATH="$PATH" HOME="$HOME" \
               PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
               TRAMITIA_PDF_WORKER_BACKEND=container \
               TRAMITIA_PDF_WORKER_IMAGE=tramitia-pdf-worker:ci \
               TRAMITIA_BROKER_SOCKET="$TRAMITIA_BROKER_SOCKET" \
-              TRAMITIA_BROKER_SOCKET_GID="$broker_gid" \
               "$(command -v python)" -u -m app.pdf_broker > /tmp/tramitia-broker.log 2>&1
           ) &
           broker_pid=$!
-          trap 'kill "$broker_pid" "${server_pid:-}" 2>/dev/null || true; sudo pkill -u tramitia-ci-web -f "uvicorn app.main:app" 2>/dev/null || true; sudo pkill -u tramitia-ci-broker -f "app.pdf_broker" 2>/dev/null || true; sudo rm -f "$TRAMITIA_BROKER_SOCKET"; sudo rmdir "$broker_dir" 2>/dev/null || true; sudo rm -rf "$stage_dir"' EXIT
-          # sudo -n authorizes setuid/setgid; setpriv supplies the final\n          # independent broker identity without an interactive PAM session.\n          # Fail promptly if broker cannot bind its local Unix socket.
+          trap 'kill "$broker_pid" "${server_pid:-}" 2>/dev/null || true; sudo pkill -u tramitia-ci-web -f "uvicorn app.main:app" 2>/dev/null || true; sudo rm -f "$TRAMITIA_BROKER_SOCKET"; sudo rmdir "$broker_dir" 2>/dev/null || true; sudo rm -rf "$stage_dir"' EXIT
+          # Fail promptly if the trusted broker cannot bind its local Unix socket.
           # This startup budget is separate from the 15s PDF parse timeout.
           for attempt in $(seq 1 45); do
             if [ -S "$TRAMITIA_BROKER_SOCKET" ]; then
@@ -142,8 +137,13 @@ jobs:
             ps -eo user,pid,args | grep '[p]df_broker' || true
             exit 1
           fi
+          # The runner cannot chgrp into the newly created group directly.
+          # After binding, root assigns only the private broker socket to the
+          # web account's group; the API does not receive Docker access.
+          sudo chgrp tramitia-ci-web "$TRAMITIA_BROKER_SOCKET"
+          sudo chmod 660 "$TRAMITIA_BROKER_SOCKET"
           test "$(stat -c %a "$TRAMITIA_BROKER_SOCKET")" = "660"
-          test "$(stat -c %U "$TRAMITIA_BROKER_SOCKET")" = "tramitia-ci-broker"
+          test "$(stat -c %U "$TRAMITIA_BROKER_SOCKET")" = "$(id -un)"
           test "$(stat -c %G "$TRAMITIA_BROKER_SOCKET")" = "tramitia-ci-web"
           echo "PDF broker socket bound with correct owner, group and permissions"
           # The web account must have no direct access to the Docker control plane.
