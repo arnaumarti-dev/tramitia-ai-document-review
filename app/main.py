@@ -23,6 +23,7 @@ from app.peer_rate_limit import (
     enforce_peer_rate_limit, resolve_request_peer, PeerRateLimited, PeerRateLimitUnavailable,
 )
 from app.upload_body_limit import UploadBodyLimit
+from app.deployment_guard import validate_web_deployment
 
 from app.schemas.report import Report
 from app.core.validators import validate_subsidy_application
@@ -332,6 +333,11 @@ def get_analyses(
         status=status,
         document_type=document_type,
     )
+
+
+# Fail isolated Linux deployments at startup if the server has Docker/root
+# permissions, lacks its protected Unix broker, or would parse PDFs locally.
+app.add_event_handler("startup", validate_web_deployment)
 
 
 # Keep the request-size guard OUTSIDE FastAPI's multipart parser and error
