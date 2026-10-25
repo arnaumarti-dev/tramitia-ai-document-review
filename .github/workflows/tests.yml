@@ -61,6 +61,20 @@ jobs:
           TRAMITIA_CONTAINER_PDF_TEST: "1"
         run: python -m unittest discover -s tests -p test_pdf_container.py -v
 
+      - name: Validate HTTPS NGINX ingress syntax
+        run: |
+          set -euo pipefail
+          certdir=$(mktemp -d)
+          trap 'rm -rf "$certdir"' EXIT
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -keyout "$certdir/privkey.pem" \
+            -out "$certdir/fullchain.pem" \
+            -subj '/CN=tramitia.example.invalid' >/dev/null 2>&1
+          docker run --rm --network=none \
+            -v "$PWD/deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" \
+            -v "$certdir:/etc/nginx/tls:ro" \
+            nginx:1.27-alpine nginx -t
+
       - name: Install headless Chromium for real browser journey
         run: |
           python -m pip install 'playwright==1.56.0'
