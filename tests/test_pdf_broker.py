@@ -10,7 +10,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from app.pdf_broker import _read_exact, create_server
+from app.pdf_broker import _read_exact, create_server, validate_broker_runtime
 from app.pdf_processing import (
     PdfProcessingError, _broker_request, parse_pdf_document,
 )
@@ -138,6 +138,69 @@ class BrokerProtocolTests(unittest.TestCase):
                 parse_pdf_document(make_demo_pdf())
         self.assertEqual(ctx.exception.status_code, 503)
         spawn.assert_not_called()
+
+
+class DaemonlessBrokerRuntimeTests(unittest.TestCase):
+    def test_existing_host_broker_keeps_fixed_container_backend(self):
+        with patch.dict(os.environ, {
+            "TRAMITIA_PDF_BROKER_DAEMONLESS": "0",
+            "TRAMITIA_PDF_WORKER_BACKEND": "container",
+        }):
+            validate_broker_runtime()
+        with patch.dict(os.environ, {
+            "TRAMITIA_PDF_BROKER_DAEMONLESS": "0",
+            "TRAMITIA_PDF_WORKER_BACKEND": "subprocess",
+        }):
+            with self.assertRaisesRegex(RuntimeError, "fixed-function"):
+                validate_broker_runtime()
+
+    def test_daemonless_broker_requires_nonroot_linux_and_no_docker(self):
+        env = {
+            "TRAMITIA_PDF_BROKER_DAEMONLESS": "1",
+            "TRAMITIA_PDF_WORKER_BACKEND": "subprocess",
+        }
+        with patch.dict(os.environ, env, clear=True), patch(
+            "app.pdf_broker.os.geteuid", return_value=65534
+        ), patch("app.pdf_broker.Path.exists", return_value=False):
+            validate_broker_runtime()
+        with patch.dict(os.environ, env, clear=True), patch(
+            "app.pdf_broker.os.geteuid", return_value=0
+        ):
+            with self.assertRaisesRegex(RuntimeError, "non-root"):
+                validate_broker_runtime()
+        with patch.dict(os.environ, env, clear=True), patch(
+            "app.pdf_broker.os.geteuid", return_value=65534
+        ), patch("app.pdf_broker.Path.exists", return_value=True):
+            with self.assertRaisesRegex(RuntimeError, "Docker socket"):
+                validate_broker_runtime()
+
+    def test_daemonless_rejects_docker_backend_or_inherited_secrets(self):
+        for extra in (
+            {"TRAMITIA_PDF_WORKER_BACKEND": "container"},
+            {"TRAMITIA_JWT_SECRET": "never-in-broker"},
+            {"POSTGRES_PASSWORD": "never-in-broker"},
+            {"DOCKER_HOST": "unix:///var/run/docker.sock"},
+        ):
+            env = {
+                "TRAMITIA_PDF_BROKER_DAEMONLESS": "1",
+                "TRAMITIA_PDF_WORKER_BACKEND": "subprocess",
+                **extra,
+            }
+            with self.subTest(extra=extra), patch.dict(
+                os.environ, env, clear=True
+            ), patch("app.pdf_broker.os.geteuid", return_value=65534), patch(
+                "app.pdf_broker.Path.exists", return_value=False
+            ):
+                with self.assertRaises(RuntimeError):
+                    validate_broker_runtime()
+
+    def test_invalid_daemonless_selector_fails_closed(self):
+        with patch.dict(os.environ, {
+            "TRAMITIA_PDF_BROKER_DAEMONLESS": "yes",
+            "TRAMITIA_PDF_WORKER_BACKEND": "container",
+        }):
+            with self.assertRaisesRegex(RuntimeError, "Invalid"):
+                validate_broker_runtime()
 
 
 if __name__ == "__main__":
