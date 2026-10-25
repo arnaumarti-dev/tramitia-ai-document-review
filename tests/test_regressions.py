@@ -51,6 +51,9 @@ class UploadTests(unittest.TestCase):
         quota = patch("app.main.consume_analysis_quota")
         quota.start()
         self.addCleanup(quota.stop)
+        peer = patch("app.main._consume_peer_budget")
+        peer.start()
+        self.addCleanup(peer.stop)
 
     def test_invalid_uploads_return_400_without_saving(self):
         for data in (b"", b"not a PDF", b"%PDF-1.7\ntruncated", make_pdf(True)):
@@ -179,7 +182,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
             return 1
 
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", headers=AUTH_HEADERS) as client:
-            with patch("app.auth.get_membership_role", return_value="owner"), patch("app.main.consume_analysis_quota"), patch("app.main.save_analysis", side_effect=save):
+            with patch("app.auth.get_membership_role", return_value="owner"), patch("app.main._consume_peer_budget"), patch("app.main.consume_analysis_quota"), patch("app.main.save_analysis", side_effect=save):
                 response = await client.post(
                     "/analyze", files={"file": ("ok.pdf", make_pdf(), "application/pdf")}
                 )
