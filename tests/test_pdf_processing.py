@@ -148,6 +148,9 @@ class PDFWorkerRouteFailures(unittest.TestCase):
         quota = patch("app.main.consume_analysis_quota")
         quota.start()
         self.addCleanup(quota.stop)
+        peer = patch("app.main._consume_peer_budget")
+        peer.start()
+        self.addCleanup(peer.stop)
 
     def test_worker_timeout_or_crash_never_saves_analysis(self):
         cases = [(422, "tiempo"), (503, "no está disponible")]
