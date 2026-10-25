@@ -1,10 +1,12 @@
 """Atomic per-peer request throttles shared across all FastAPI instances.
 
-Do NOT trust X-Forwarded-For or user-supplied headers. The caller passes
-the ASGI connection address, which must be set by a correctly configured
-server. Run Uvicorn with --no-proxy-headers, otherwise it may have already
-rewritten ASGI scope['client'] based on forwarded headers. A production
-reverse proxy must apply stronger client-IP limiting at the edge.
+Do NOT trust X-Forwarded-For or user-supplied headers. With no
+TRAMITIA_TRUSTED_PROXY_IPS allowlist, only the direct ASGI peer is counted.
+When a trusted peer is explicitly configured, accept exactly one overwritten
+X-Real-IP literal from that peer, never from an untrusted direct client.
+Uvicorn MUST run with --no-proxy-headers in both cases. The reverse proxy
+must apply stronger limits at the edge and must be the only component that
+can connect to the application when proxy trust is enabled.
 """
 from __future__ import annotations
 
@@ -52,6 +54,50 @@ def _canonical_peer(value: str | None) -> str:
         if value != "testclient":
             raise PeerRateLimitUnavailable() from None
         return value
+
+
+def resolve_request_peer(request) -> str:
+    """Select the real client only when the direct peer is explicitly trusted.
+
+    Never use X-Forwarded-For or Forwarded. A trusted ingress MUST replace
+    all incoming X-Real-IP values, not append or forward client input.
+    With no proxy allowlist, all forwarded headers are ignored.
+    """
+    direct = _canonical_peer(
+        request.client.host if request.client is not None else None
+    )
+    configured = os.environ.get("TRAMITIA_TRUSTED_PROXY_IPS", "").strip()
+    if not configured:
+        return direct
+
+    # Exact IPs only: CIDRs and wildcards make it too easy to trust public
+    # sources. Invalid configuration is an error, not an implicit bypass.
+    raw = [item.strip() for item in configured.split(",")]
+    if (len(raw) > 8 or any(not item for item in raw)):
+        raise PeerRateLimitUnavailable()
+    try:
+        trusted = {ipaddress.ip_address(item).compressed for item in raw}
+    except ValueError as exc:
+        raise PeerRateLimitUnavailable() from exc
+
+    if direct not in trusted:
+        return direct
+
+    # Inspect raw ASGI headers so duplicate case-insensitive fields cannot
+    # be hidden by a framework's dictionary normalization.
+    values = [
+        value for name, value in request.scope.get("headers", [])
+        if name.lower() == b"x-real-ip"
+    ]
+    if len(values) != 1 or len(values[0]) > 45:
+        raise PeerRateLimitUnavailable()
+    try:
+        ip = values[0].decode("ascii", "strict")
+        if ip != ip.strip() or "," in ip:
+            raise PeerRateLimitUnavailable()
+        return ipaddress.ip_address(ip).compressed
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise PeerRateLimitUnavailable() from exc
 
 
 def _hashed_key(peer: str, category: str) -> str:
