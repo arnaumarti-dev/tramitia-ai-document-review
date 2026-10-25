@@ -217,18 +217,22 @@ def _run_bounded_worker(
             422, "El análisis del PDF superó el tiempo máximo permitido."
         ) from exc
     finally:
-        # Kill and reap on overflow, timeout or protocol errors. Killing the
-        # private process group also stops local descendants where supported.
-        if child.poll() is None:
+        # Kill the private process group even if its original leader has
+        # already exited: a hostile descendant can inherit stdout, leave
+        # read() blocked and otherwise survive the parent process. This is
+        # also safe on successful jobs: the PDF worker does not need children.
+        # The group was created by start_new_session=True in Popen.
+        if os.name == "posix":
             try:
-                if os.name == "posix":
-                    os.killpg(child.pid, signal.SIGKILL)
-                else:
-                    child.kill()
+                os.killpg(child.pid, signal.SIGKILL)
             except ProcessLookupError:
-                pass
+                pass  # No leader or surviving descendants remain.
             except OSError:
-                child.kill()
+                if child.poll() is None:
+                    child.kill()
+        elif child.poll() is None:
+            child.kill()
+
         try:
             child.wait(timeout=2)
         except subprocess.TimeoutExpired:
