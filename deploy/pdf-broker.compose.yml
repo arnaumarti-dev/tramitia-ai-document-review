@@ -1,0 +1,40 @@
+# A separately provisioned, non-root PDF broker with NO Docker daemon
+# access at runtime. Deployment operators launch this with Docker Compose;
+# the FastAPI and broker processes never need /var/run/docker.sock.
+#
+# Before startup, create /run/tramitia owned by UID 65534 and group GID
+# TRAMITIA_WEB_GID with mode 0770, on the SAME Linux host as FastAPI.
+# Configure the web account in that group; no public ports are exposed.
+services:
+  pdf-broker:
+    build:
+      context: ..
+      dockerfile: Dockerfile.pdf-broker
+    image: tramitia-pdf-broker:local
+    user: "65534:65534"
+    group_add:
+      - "${TRAMITIA_WEB_GID:?Set the numeric tramitia-web group ID}"
+    environment:
+      TRAMITIA_PDF_BROKER_DAEMONLESS: "1"
+      TRAMITIA_PDF_WORKER_BACKEND: subprocess
+      TRAMITIA_BROKER_SOCKET: /run/tramitia/pdf-broker.sock
+      TRAMITIA_BROKER_SOCKET_GID: "${TRAMITIA_WEB_GID:?Set group ID}"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 1.0
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    volumes:
+      - type: bind
+        source: /run/tramitia
+        target: /run/tramitia
+        bind:
+          create_host_path: false
+    restart: unless-stopped
+    stop_grace_period: 20s
