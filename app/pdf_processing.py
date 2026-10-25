@@ -90,6 +90,7 @@ _BROKER_ERRORS = {
     "too_large": (413, "El PDF supera el límite de páginas o de texto."),
     "failed": (422, "El analizador de PDF no pudo completar la operación."),
     "unavailable": (503, "El servicio de análisis de PDF no está disponible."),
+    "busy": (503, "El servicio de análisis de PDF está ocupado. Inténtalo de nuevo."),
 }
 
 
