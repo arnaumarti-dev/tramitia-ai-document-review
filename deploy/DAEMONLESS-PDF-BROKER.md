@@ -98,9 +98,12 @@ the container cannot access an external network or the Docker socket.
   application processes, not from the host administrator or Docker itself.
 - The socket protocol is local-only and has no cross-host authentication;
   do not expose it via TCP or mount it to unrelated containers.
-- The subprocess's stdout is limited after collection, not during output
-  streaming. The 1 GiB container limit reduces damage; a bounded streaming
-  implementation remains a security improvement to complete.
+- The worker supervisor now reads **at most 3,000,001 stdout bytes**
+  (limit + 1) while the process is executing. Output overflow or a 15-second
+  end-to-end timeout kills and reaps the worker process; a separate feeder
+  prevents pipe deadlocks. These checks reduce output-flood risks but are
+  not a substitute for the container's 1 GiB limit, kernel protections,
+  and per-document sandboxing.
 - Review image signatures/digests, runtime security policies, host
   permissions, backups, ingress, customer consent, PDF retention and GDPR
   obligations before treating real client material.
