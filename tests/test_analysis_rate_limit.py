@@ -30,6 +30,9 @@ class AnalysisQuotaApiTests(unittest.TestCase):
         membership = patch("app.auth.get_membership_role", return_value="owner")
         membership.start()
         self.addCleanup(membership.stop)
+        peer = patch("app.main._consume_peer_budget")
+        peer.start()
+        self.addCleanup(peer.stop)
 
     def test_user_and_organization_quota_return_429_without_parsing_or_saving(self):
         for scope in ("usuario", "gestoría"):
