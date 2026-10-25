@@ -432,6 +432,31 @@ limits; cap concurrent workers, enforce an HTTP upload-body ceiling
 *before* multipart buffering, and review operational logs, data retention,
 security and GDPR requirements.
 
+### Alternative: daemonless PDF broker (Linux reference)
+
+A new optional `Dockerfile.pdf-broker` and
+`deploy/pdf-broker.compose.yml` allow an operator to **start the entire
+broker inside a pre-isolated, non-root container**. Unlike the older
+host-broker architecture, **neither FastAPI nor this running broker
+needs the Docker socket or Docker CLI to process a PDF**.
+
+The container is networkless, read-only, limited to 1 GiB/one CPU,
+has no inherited application secrets, and shares only the private
+`/run/tramitia` Unix socket directory. It executes a short-lived
+resource-limited `python -I` child process for each PDF. Host web
+and broker identities have separate UIDs, with a narrowly shared Unix
+group for the socket. FastAPI still uses
+`TRAMITIA_PDF_WORKER_BACKEND=broker` and
+`TRAMITIA_DEPLOYMENT_PROFILE=isolated`.
+
+See **[deployment reference and limitations](deploy/DAEMONLESS-PDF-BROKER.md)**,
+and `deploy/systemd/tramitia-web-daemonless.service`. CI includes a
+real fictional-PDF smoke test through this mode with a Docker-denied
+web account. **This is an alternative development architecture, not
+an approved production sandbox**: the parser shares a container UID
+with its broker, per-document kernel isolation remains limited and
+host/VM separation is still recommended for sensitive customer PDFs.
+
 ### PDF broker: separate the web API from the Docker control plane
 
 **Recommended architecture for the next development stage (Linux only):**
