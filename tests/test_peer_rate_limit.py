@@ -114,13 +114,13 @@ class PostgreSQLPeerAdmissionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.conn = get_conn()
-        cls.peers = [
-            "198.51.100." + str(20 + i) for i in range(3)
-        ]
         cls.unique = uuid.uuid4().hex
-        # IPv6 addresses are globally valid literals and are not a user
-        # input header. Pseudonymous hashing makes cleanup safe and scoped.
-        cls.peers = [f"2001:db8:{cls.unique[:4]}::{i+1}" for i in range(3)]
+        # Use the same canonical IPv6 representation as the production
+        # admission function, including removal of leading zeros.
+        cls.peers = [
+            _canonical_peer(f"2001:db8:{cls.unique[:4]}::{i+1}")
+            for i in range(3)
+        ]
         cls.keys = [
             _hashed_key(peer, category)
             for peer in cls.peers for category in LIMITS
