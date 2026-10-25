@@ -169,9 +169,35 @@ def create_server(socket_path: str) -> PdfBrokerServer:
     return server
 
 
+def validate_broker_runtime() -> None:
+    """Require deliberate selection of one of two isolated execution modes.
+
+    In daemonless mode an outer, separately provisioned container provides
+    kernel isolation; the broker must not control a container runtime.
+    """
+    backend = os.environ.get("TRAMITIA_PDF_WORKER_BACKEND")
+    daemonless = os.environ.get("TRAMITIA_PDF_BROKER_DAEMONLESS", "0")
+    if daemonless == "0":
+        if backend != "container":
+            raise RuntimeError("Host broker must launch fixed-function containers")
+        return
+    if daemonless != "1":
+        raise RuntimeError("Invalid daemonless broker mode")
+    if sys.platform != "linux" or not hasattr(os, "geteuid"):
+        raise RuntimeError("Daemonless broker requires a Linux sandbox")
+    if os.geteuid() == 0 or backend != "subprocess":
+        raise RuntimeError("Daemonless broker must be non-root using subprocess")
+    if any(name in os.environ for name in (
+        "TRAMITIA_JWT_SECRET", "POSTGRES_PASSWORD",
+        "DATABASE_URL", "DOCKER_HOST", "DOCKER_CONTEXT",
+    )):
+        raise RuntimeError("Daemonless broker must have no application or Docker secrets")
+    if Path("/var/run/docker.sock").exists():
+        raise RuntimeError("Daemonless broker must not expose Docker socket")
+
+
 def main() -> None:
-    if os.environ.get("TRAMITIA_PDF_WORKER_BACKEND") != "container":
-        raise SystemExit("Broker must launch fixed-function container workers")
+    validate_broker_runtime()
     socket_path = os.environ.get("TRAMITIA_BROKER_SOCKET", _SOCKET_DEFAULT)
     server = create_server(socket_path)
     try:
