@@ -111,7 +111,7 @@ jobs:
           (
             cd "$stage_dir"
             # setpriv avoids sudo/PAM startup behavior inside background jobs.
-            setpriv --reuid="$(id -u tramitia-ci-broker)" \
+            sudo -n setpriv --reuid="$(id -u tramitia-ci-broker)" \
               --regid="$(id -g tramitia-ci-broker)" --init-groups \
               env -i PATH="$PATH" HOME=/home/tramitia-ci-broker \
               PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
@@ -123,7 +123,7 @@ jobs:
           ) &
           broker_pid=$!
           trap 'kill "$broker_pid" "${server_pid:-}" 2>/dev/null || true; sudo pkill -u tramitia-ci-web -f "uvicorn app.main:app" 2>/dev/null || true; sudo pkill -u tramitia-ci-broker -f "app.pdf_broker" 2>/dev/null || true; sudo rm -f "$TRAMITIA_BROKER_SOCKET"; sudo rmdir "$broker_dir" 2>/dev/null || true; sudo rm -rf "$stage_dir"' EXIT
-          # Fail promptly if broker cannot bind its local Unix socket.
+          # sudo -n authorizes setuid/setgid; setpriv supplies the final\n          # independent broker identity without an interactive PAM session.\n          # Fail promptly if broker cannot bind its local Unix socket.
           # This startup budget is separate from the 15s PDF parse timeout.
           for attempt in $(seq 1 45); do
             if [ -S "$TRAMITIA_BROKER_SOCKET" ]; then
@@ -147,7 +147,7 @@ jobs:
           test "$(stat -c %G "$TRAMITIA_BROKER_SOCKET")" = "tramitia-ci-web"
           echo "PDF broker socket bound with correct owner, group and permissions"
           # The web account must have no direct access to the Docker control plane.
-          if setpriv --reuid="$(id -u tramitia-ci-web)" \
+          if sudo -n setpriv --reuid="$(id -u tramitia-ci-web)" \
             --regid="$(id -g tramitia-ci-web)" --init-groups \
             test -r /var/run/docker.sock; then
             echo "SECURITY FAILURE: web account can read Docker socket" >&2
@@ -157,7 +157,7 @@ jobs:
           # identity, while the web cannot access the Docker control plane.
           (
             cd "$stage_dir"
-            setpriv --reuid="$(id -u tramitia-ci-web)" \
+            sudo -n setpriv --reuid="$(id -u tramitia-ci-web)" \
               --regid="$(id -g tramitia-ci-web)" --init-groups \
               env -i PATH="$PATH" PYTHONDONTWRITEBYTECODE=1 \
               TRAMITIA_PDF_WORKER_BACKEND=broker \
@@ -168,7 +168,7 @@ jobs:
           # database credentials are scoped to the API, not the broker.
           (
             cd "$stage_dir"
-            setpriv --reuid="$(id -u tramitia-ci-web)" \
+            sudo -n setpriv --reuid="$(id -u tramitia-ci-web)" \
               --regid="$(id -g tramitia-ci-web)" --init-groups \
               env -i PATH="$PATH" PYTHONDONTWRITEBYTECODE=1 \
               POSTGRES_HOST="$POSTGRES_HOST" POSTGRES_PORT="$POSTGRES_PORT" \
