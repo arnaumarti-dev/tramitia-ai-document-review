@@ -25,7 +25,12 @@ test -n "$gid"
 # The dedicated broker can bind the socket, and only the web group can
 # traverse the shared Unix-socket directory.
 sudo chown "65534:$gid" "$socket_dir"
-sudo chmod 0770 "$socket_dir"
+sudo chmod 0750 "$socket_dir"
+test "$(sudo stat -c %a "$socket_dir")" = 750
+if sudo -u "$account" test -w "$socket_dir"; then
+  echo "SECURITY FAILURE: web identity can replace the broker socket" >&2
+  exit 1
+fi
 
 docker run --detach --rm --name "$container" \
   --network=none --read-only --cap-drop=ALL \

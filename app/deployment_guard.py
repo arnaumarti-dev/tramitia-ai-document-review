@@ -38,6 +38,15 @@ def validate_web_deployment() -> None:
     ))
     if not socket_path.is_absolute() or socket_path.is_symlink():
         raise RuntimeError("Invalid or symlinked PDF broker socket path")
+    directory = socket_path.parent
+    if directory.is_symlink():
+        raise RuntimeError("PDF broker socket directory must not be a symlink")
+    try:
+        directory_mode = directory.stat().st_mode
+    except OSError as exc:
+        raise RuntimeError("PDF broker socket directory is unavailable") from exc
+    if not stat.S_ISDIR(directory_mode) or directory_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise RuntimeError("PDF broker directory must not be group/world writable")
     try:
         mode = socket_path.stat().st_mode
     except OSError as exc:

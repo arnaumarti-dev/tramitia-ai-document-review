@@ -34,8 +34,10 @@ Unix socket directory as a writable host mount. No TCP port is exposed.
 - A non-root account `tramitia-web`, group `tramitia-web`; **not a member**
   of the `docker` group.
 - A host bind directory `/run/tramitia` owned by UID 65534 and group
-  `tramitia-web`, mode `0770`. It must **not be world writable**. No other
-  host directory is mounted into the broker.
+  `tramitia-web`, mode `0750`. The web group needs traversal rights to
+  connect to the `0660` socket, **not directory write access**. A group-
+  writable directory would let the web process unlink/replace the socket
+  and impersonate the broker. No other host directory is mounted into it.
 - Bind FastAPI only to `127.0.0.1:8000`, disable Uvicorn proxy headers,
   and configure `TRAMITIA_DEPLOYMENT_PROFILE=isolated`.
 
@@ -45,7 +47,7 @@ An operator may configure the runtime directory using a vetted
 ```bash
 getent group tramitia-web
 # Inspect existing accounts and group membership before creating anything.
-echo 'd /run/tramitia 0770 65534 tramitia-web -' | \
+echo 'd /run/tramitia 0750 65534 tramitia-web -' | \
   sudo tee /etc/tmpfiles.d/tramitia-pdf-socket.conf
 sudo systemd-tmpfiles --create /etc/tmpfiles.d/tramitia-pdf-socket.conf
 stat -c '%a %u %g' /run/tramitia

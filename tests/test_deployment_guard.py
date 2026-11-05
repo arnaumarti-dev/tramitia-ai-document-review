@@ -88,6 +88,18 @@ class IsolatedWebStartupTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "symlinked"):
                     validate_web_deployment()
 
+    def test_rejects_group_writable_socket_directory_at_web_startup(self):
+        directory = Path(self.folder.name)
+        directory.chmod(0o770)
+        try:
+            with patch("app.deployment_guard.os.geteuid", return_value=1000), patch(
+                "app.deployment_guard.os.access", side_effect=self.fake_access
+            ):
+                with self.assertRaisesRegex(RuntimeError, "group/world writable"):
+                    validate_web_deployment()
+        finally:
+            directory.chmod(0o700)
+
     def test_unknown_profile_is_rejected(self):
         with patch.dict(os.environ, {
             "TRAMITIA_DEPLOYMENT_PROFILE": "production-please",

@@ -131,11 +131,13 @@ def create_server(socket_path: str) -> PdfBrokerServer:
     if not path.is_absolute():
         raise RuntimeError("Broker socket must use an absolute path")
     directory = path.parent
-    if not directory.is_dir():
-        raise RuntimeError("Broker socket directory must exist")
+    if directory.is_symlink() or not directory.is_dir():
+        raise RuntimeError("Broker socket directory must exist and not be a symlink")
     mode = directory.stat().st_mode
-    if mode & stat.S_IWOTH:
-        raise RuntimeError("Broker directory cannot be world-writable")
+    # A group-writable directory lets a compromised web process unlink or
+    # replace the socket and impersonate the trusted PDF broker.
+    if mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise RuntimeError("Broker directory cannot be writable by group or others")
     if path.exists() or path.is_symlink():
         raise RuntimeError("Broker socket already exists; check stale service")
     server = PdfBrokerServer(str(path), _Handler)

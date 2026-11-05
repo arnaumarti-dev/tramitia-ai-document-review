@@ -3,7 +3,9 @@
 # the FastAPI and broker processes never need /var/run/docker.sock.
 #
 # Before startup, create /run/tramitia owned by UID 65534 and group GID
-# TRAMITIA_WEB_GID with mode 0770, on the SAME Linux host as FastAPI.
+# TRAMITIA_WEB_GID with mode 0750, on the SAME Linux host as FastAPI.
+# The web group must not have directory write permission: it only needs to
+# traverse the directory to connect to the restricted 0660 broker socket.
 # Configure the web account in that group; no public ports are exposed.
 services:
   pdf-broker:

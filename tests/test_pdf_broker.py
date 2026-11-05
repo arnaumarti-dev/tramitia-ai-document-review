@@ -47,6 +47,30 @@ class BrokerProtocolTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             create_server(self.path)
 
+    def test_rejects_group_writable_or_symlinked_socket_directory(self):
+        with tempfile.TemporaryDirectory(prefix="tramitia-dir-policy-") as folder:
+            directory = Path(folder)
+            path = directory / "new-broker.sock"
+            directory.chmod(0o770)
+            with self.assertRaisesRegex(RuntimeError, "writable by group"):
+                create_server(str(path))
+            self.assertFalse(path.exists())
+
+            directory.chmod(0o750)
+            server = create_server(str(path))
+            try:
+                self.assertTrue(path.is_socket())
+            finally:
+                server.server_close()
+                path.unlink(missing_ok=True)
+
+            alias = directory / "socket-dir-link"
+            real = directory / "socket-dir"
+            real.mkdir()
+            alias.symlink_to(real, target_is_directory=True)
+            with self.assertRaisesRegex(RuntimeError, "symlink"):
+                create_server(str(alias / "broker.sock"))
+
     def test_good_pdf_protocol_returns_text_without_docker_in_api(self):
         sample = make_demo_pdf()
         with patch("app.pdf_broker.parse_pdf_document", return_value=("Texto ficticio", 1)) as parser, patch(
