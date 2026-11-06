@@ -87,7 +87,7 @@ assert not os.path.exists("/var/run/docker.sock")
 assert "TRAMITIA_JWT_SECRET" not in os.environ
 assert "POSTGRES_PASSWORD" not in os.environ
 assert os.environ["TRAMITIA_BROKER_ALLOWED_PEER_UID"] != str(os.geteuid())
-# The parser's Linux UID must not be admitted by the broker socket.
+# The Linux parser UID must not be admitted by the broker socket.
 peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 peer.settimeout(3)
 peer.connect("/run/tramitia/pdf-broker.sock")
