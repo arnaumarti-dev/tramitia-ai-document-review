@@ -66,7 +66,7 @@ jobs:
       - name: Verify daemonless broker has no Docker, network or credentials
         run: |
           set -euo pipefail
-          TRAMITIA_WEB_GID=65534 docker compose -f deploy/pdf-broker.compose.yml config --quiet
+          TRAMITIA_WEB_UID=1000 TRAMITIA_WEB_GID=65534 docker compose -f deploy/pdf-broker.compose.yml config --quiet
           bash tests/smoke_daemonless_broker.sh
 
       - name: Validate HTTPS NGINX ingress syntax

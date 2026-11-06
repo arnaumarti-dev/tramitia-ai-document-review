@@ -21,6 +21,7 @@ services:
       TRAMITIA_PDF_WORKER_BACKEND: subprocess
       TRAMITIA_BROKER_SOCKET: /run/tramitia/pdf-broker.sock
       TRAMITIA_BROKER_SOCKET_GID: "${TRAMITIA_WEB_GID:?Set group ID}"
+      TRAMITIA_BROKER_ALLOWED_PEER_UID: "${TRAMITIA_WEB_UID:?Set the numeric web user ID}"
     network_mode: none
     read_only: true
     cap_drop: [ALL]

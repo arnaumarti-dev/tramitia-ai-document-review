@@ -57,6 +57,9 @@ stat -c '%a %u %g' /run/tramitia
 
 ```bash
 export TRAMITIA_WEB_GID="$(getent group tramitia-web | cut -d: -f3)"
+export TRAMITIA_WEB_UID="$(id -u tramitia-web)"
+# The web account must have a different UID from the container broker (65534).
+test "$TRAMITIA_WEB_UID" -ne 65534
 # Review Dockerfile.pdf-broker and deploy/pdf-broker.compose.yml first.
 docker compose -f deploy/pdf-broker.compose.yml config --quiet
 docker compose -f deploy/pdf-broker.compose.yml build
@@ -66,7 +69,12 @@ stat -c '%a %u %g' /run/tramitia/pdf-broker.sock
 ```
 
 The deployment uses a numeric supplemental group, allowing the broker's
-UID 65534 to create a socket readable/writable by the web group. The
+UID 65534 to create a socket readable/writable by the web group. It also
+sets `TRAMITIA_BROKER_ALLOWED_PEER_UID` to the host FastAPI user's numeric
+UID. On Linux the broker checks `SO_PEERCRED` **before reading a request**;
+a parser running under the broker's UID cannot submit a request as the web
+user. This assumes the host and container share the expected UID mapping;
+verify the mapping with your runtime if user namespaces are enabled. The
 broker itself does **not** receive the Docker socket, Docker CLI, secrets,
 PostgreSQL credentials or application source files.
 
@@ -92,9 +100,12 @@ the container cannot access an external network or the Docker socket.
 - The broker and its PDF-parsing subprocess have the same container UID
   and share the broker socket mount. A parser compromise could disrupt
   the broker and attempt socket misuse; this is **not equivalent to a
-  separate microVM per uploaded PDF**. The container's limits and lack
-  of secrets/network reduce impact, but do not eliminate host kernel
-  or denial-of-service risks.
+  separate microVM per uploaded PDF**. Peer-UID checks reject parser-origin
+  broker requests, but the parser still has the broker owner's UID and can
+  potentially unlink/replace the shared socket path. This requires separate
+  parser credentials or mount isolation before production. The container's
+  limits and lack of secrets/network reduce impact, but do not eliminate
+  host kernel or denial-of-service risks.
 - A trusted operator/rootful Docker daemon still controls the host at
   deployment time. This implementation removes access from runtime
   application processes, not from the host administrator or Docker itself.

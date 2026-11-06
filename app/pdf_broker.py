@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import socket
 import socketserver
 import stat
 import struct
@@ -25,6 +26,28 @@ MAX_RESPONSE_BYTES = 3_000_000
 MAX_REQUEST_RECEIVE_SECONDS = 10
 MAX_CONCURRENT_BROKER_REQUESTS = 1
 _SOCKET_DEFAULT = "/run/tramitia/pdf-broker.sock"
+
+
+def _configured_peer_uid() -> int | None:
+    """Require a distinct trusted web UID for the daemonless broker.
+
+    SO_PEERCRED is supplied by Linux for the connected socket, not by the
+    requesting process. Other execution modes may opt in to the same check.
+    """
+    raw = os.getenv("TRAMITIA_BROKER_ALLOWED_PEER_UID", "").strip()
+    daemonless = os.getenv("TRAMITIA_PDF_BROKER_DAEMONLESS", "0") == "1"
+    if not raw:
+        if daemonless:
+            raise RuntimeError("Daemonless broker requires an allowed web peer UID")
+        return None
+    if sys.platform != "linux" or not hasattr(socket, "SO_PEERCRED"):
+        raise RuntimeError("Broker peer UID checks require Linux SO_PEERCRED")
+    if not raw.isascii() or not raw.isdecimal() or int(raw) == 0:
+        raise RuntimeError("Invalid allowed broker web peer UID")
+    uid = int(raw)
+    if uid >= (1 << 32) or uid == os.geteuid():
+        raise RuntimeError("Broker web peer UID must differ from the broker UID")
+    return uid
 
 
 def _read_exact(sock, length: int, *, deadline: float) -> bytes:
@@ -97,11 +120,26 @@ class PdfBrokerServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer
     block_on_close = False
     request_queue_size = 4
 
-    def __init__(self, server_address, request_handler_class):
+    def __init__(self, server_address, request_handler_class, *, allowed_peer_uid=None):
         self._request_slots = threading.BoundedSemaphore(MAX_CONCURRENT_BROKER_REQUESTS)
+        self._allowed_peer_uid = allowed_peer_uid
         super().__init__(server_address, request_handler_class)
 
     def process_request(self, request, client_address):
+        if self._allowed_peer_uid is not None:
+            # Reject before reserving capacity or accepting PDF bytes.
+            # Never rely on a UID supplied inside the request protocol.
+            try:
+                credentials = request.getsockopt(
+                    socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
+                )
+                _pid, peer_uid, _gid = struct.unpack("3i", credentials)
+                if peer_uid != self._allowed_peer_uid:
+                    self.shutdown_request(request)
+                    return
+            except (OSError, struct.error):
+                self.shutdown_request(request)
+                return
         if not self._request_slots.acquire(blocking=False):
             try:
                 request.settimeout(1)
@@ -140,7 +178,10 @@ def create_server(socket_path: str) -> PdfBrokerServer:
         raise RuntimeError("Broker directory cannot be writable by group or others")
     if path.exists() or path.is_symlink():
         raise RuntimeError("Broker socket already exists; check stale service")
-    server = PdfBrokerServer(str(path), _Handler)
+    allowed_peer_uid = _configured_peer_uid()
+    server = PdfBrokerServer(
+        str(path), _Handler, allowed_peer_uid=allowed_peer_uid
+    )
     try:
         group = os.getenv("TRAMITIA_BROKER_SOCKET_GROUP", "").strip()
         numeric_gid = os.getenv("TRAMITIA_BROKER_SOCKET_GID", "").strip()
@@ -196,6 +237,7 @@ def validate_broker_runtime() -> None:
         raise RuntimeError("Daemonless broker must have no application or Docker secrets")
     if Path("/var/run/docker.sock").exists():
         raise RuntimeError("Daemonless broker must not expose Docker socket")
+    _configured_peer_uid()
 
 
 def main() -> None:

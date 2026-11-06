@@ -71,6 +71,36 @@ class BrokerProtocolTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "symlink"):
                 create_server(str(alias / "broker.sock"))
 
+    @unittest.skipUnless(
+        hasattr(socket, "SO_PEERCRED") and os.name == "posix",
+        "Linux SO_PEERCRED required",
+    )
+    def test_wrong_peer_uid_rejected_before_pdf_processing(self):
+        with tempfile.TemporaryDirectory(prefix="tramitia-peer-") as folder:
+            path = str(Path(folder) / "peer.sock")
+            with patch.dict(os.environ, {
+                "TRAMITIA_PDF_BROKER_DAEMONLESS": "0",
+                "TRAMITIA_BROKER_ALLOWED_PEER_UID": str(os.getuid() + 1),
+            }):
+                server = create_server(path)
+            thread = threading.Thread(
+                target=server.serve_forever,
+                kwargs={"poll_interval": 0.01}, daemon=True,
+            )
+            thread.start()
+            try:
+                with patch("app.pdf_broker.parse_pdf_document") as parser:
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                        sock.settimeout(3)
+                        sock.connect(path)
+                        self.assertEqual(sock.recv(1), b"")
+                    parser.assert_not_called()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+                Path(path).unlink(missing_ok=True)
+
     def test_good_pdf_protocol_returns_text_without_docker_in_api(self):
         sample = make_demo_pdf()
         with patch("app.pdf_broker.parse_pdf_document", return_value=("Texto ficticio", 1)) as parser, patch(
@@ -182,6 +212,7 @@ class DaemonlessBrokerRuntimeTests(unittest.TestCase):
         env = {
             "TRAMITIA_PDF_BROKER_DAEMONLESS": "1",
             "TRAMITIA_PDF_WORKER_BACKEND": "subprocess",
+            "TRAMITIA_BROKER_ALLOWED_PEER_UID": "12345",
         }
         with patch.dict(os.environ, env, clear=True), patch(
             "app.pdf_broker.os.geteuid", return_value=65534
@@ -208,6 +239,7 @@ class DaemonlessBrokerRuntimeTests(unittest.TestCase):
             env = {
                 "TRAMITIA_PDF_BROKER_DAEMONLESS": "1",
                 "TRAMITIA_PDF_WORKER_BACKEND": "subprocess",
+                "TRAMITIA_BROKER_ALLOWED_PEER_UID": "12345",
                 **extra,
             }
             with self.subTest(extra=extra), patch.dict(
@@ -217,6 +249,25 @@ class DaemonlessBrokerRuntimeTests(unittest.TestCase):
             ):
                 with self.assertRaises(RuntimeError):
                     validate_broker_runtime()
+
+    def test_daemonless_requires_distinct_explicit_web_identity(self):
+        env = {
+            "TRAMITIA_PDF_BROKER_DAEMONLESS": "1",
+            "TRAMITIA_PDF_WORKER_BACKEND": "subprocess",
+        }
+        with patch.dict(os.environ, env, clear=True), patch(
+            "app.pdf_broker.os.geteuid", return_value=65534
+        ), patch("app.pdf_broker.Path.exists", return_value=False):
+            with self.assertRaisesRegex(RuntimeError, "allowed web peer UID"):
+                validate_broker_runtime()
+
+        with patch.dict(os.environ, {
+            **env, "TRAMITIA_BROKER_ALLOWED_PEER_UID": "65534"
+        }, clear=True), patch(
+            "app.pdf_broker.os.geteuid", return_value=65534
+        ), patch("app.pdf_broker.Path.exists", return_value=False):
+            with self.assertRaisesRegex(RuntimeError, "must differ"):
+                validate_broker_runtime()
 
     def test_invalid_daemonless_selector_fails_closed(self):
         with patch.dict(os.environ, {

@@ -20,7 +20,9 @@ sudo groupadd --system "$group"
 sudo useradd --system --no-create-home --gid "$group" \
   --shell /usr/sbin/nologin "$account"
 gid=$(getent group "$group" | cut -d: -f3)
+uid=$(id -u "$account")
 test -n "$gid"
+test "$uid" -ne 65534
 
 # The dedicated broker can bind the socket, and only the web group can
 # traverse the shared Unix-socket directory.
@@ -43,6 +45,7 @@ docker run --detach --rm --name "$container" \
   --env TRAMITIA_PDF_WORKER_BACKEND=subprocess \
   --env TRAMITIA_BROKER_SOCKET=/run/tramitia/pdf-broker.sock \
   --env "TRAMITIA_BROKER_SOCKET_GID=$gid" \
+  --env "TRAMITIA_BROKER_ALLOWED_PEER_UID=$uid" \
   tramitia-pdf-broker:ci
 
 broker_socket="$socket_dir/pdf-broker.sock"
@@ -83,6 +86,13 @@ assert os.geteuid() == 65534
 assert not os.path.exists("/var/run/docker.sock")
 assert "TRAMITIA_JWT_SECRET" not in os.environ
 assert "POSTGRES_PASSWORD" not in os.environ
+assert os.environ["TRAMITIA_BROKER_ALLOWED_PEER_UID"] != str(os.geteuid())
+# The parser's Linux UID must not be admitted by the broker socket.
+peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+peer.settimeout(3)
+peer.connect("/run/tramitia/pdf-broker.sock")
+assert peer.recv(1) == b"", "Broker accepted its own container UID"
+peer.close()
 probe = socket.socket()
 probe.settimeout(1)
 code = probe.connect_ex(("192.0.2.1", 443))
