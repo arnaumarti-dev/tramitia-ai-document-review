@@ -69,6 +69,12 @@ jobs:
           TRAMITIA_WEB_UID=1000 TRAMITIA_WEB_GID=65534 docker compose -f deploy/pdf-broker.compose.yml config --quiet
           bash tests/smoke_daemonless_broker.sh
 
+      - name: Verify split broker/parser containers and filesystem separation
+        run: |
+          set -euo pipefail
+          TRAMITIA_WEB_UID=1000 TRAMITIA_WEB_GID=65534 docker compose -f deploy/split-pdf-services.compose.yml config --quiet
+          bash tests/smoke_split_pdf_services.sh
+
       - name: Validate HTTPS NGINX ingress syntax
         run: |
           set -euo pipefail

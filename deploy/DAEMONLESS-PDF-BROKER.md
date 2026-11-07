@@ -1,5 +1,10 @@
 # Daemonless PDF broker: reference Linux architecture
 
+For an experimental alternative with separate broker and parser container
+identities and separate socket mounts, see
+[SPLIT-PDF-SERVICES.md](SPLIT-PDF-SERVICES.md). This legacy single-container
+deployment still has the shared-UID parser risk described below.
+
 This is a **development/reference deployment**, not an approval to process
 real customer records. It removes the Docker control socket from **both**
 FastAPI and the running PDF broker. Only a trusted host operator uses
