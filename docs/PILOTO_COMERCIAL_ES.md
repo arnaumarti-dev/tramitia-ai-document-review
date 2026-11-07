@@ -21,8 +21,9 @@ elegibilidad ni una comprobación de firmas electrónicas.
 3. Como propietario, subir el PDF, mostrar puntuación, advertencias,
    historial y exportación JSON. Explicar que son indicios, no conclusiones.
 4. Como empleado, demostrar acceso a su organización y acceso denegado a la
-   otra. Como administrador, mostrar borrado del informe por API
-   `DELETE /analyses/{id}`.
+   otra (sin botón de borrado). Como propietario, mostrar el botón **Eliminar**
+   con confirmación y comprobar que borra el informe de su propia gestoría
+   mediante `DELETE /analyses/{id}`.
 5. Solicitar *feedback* sin subir, enviar por correo ni conservar documentos
    de clientes. Anotar solo observaciones comerciales sin información personal.
 

@@ -267,3 +267,87 @@ test('invitation URL fragment is cleared before showing acceptance form', () => 
   assert.equal(vm.runInContext('pendingInviteToken', context), 'abcdefghijklmnopqrstuvwxyz123456');
   assert.equal(vm.runInContext('window.location.hash', context), '');
 });
+
+test('only owners and admins see safely escaped report deletion controls', async () => {
+  for (const role of ['owner', 'admin', 'employee']) {
+    const { context, element } = setup(async () => ({ ok: true, json: async () => ({
+      total: 1, items: [{ id: 42, filename: '<script>alert(1)</script>', score: 70, status: 'REVISAR' }]
+    }) }));
+    vm.runInContext(`currentRole = '${role}'`, context);
+    await context.loadAnalyses();
+    const html = element('historyBody').innerHTML;
+    assert.match(html, /&lt;script&gt;/);
+    assert.doesNotMatch(html, /<script>/);
+    assert.equal(html.includes('data-delete-id="42"'), role !== 'employee');
+    assert.match(html, /data-export-id="42"/);
+  }
+});
+
+test('cancelled report deletion sends no request and keeps the report', async () => {
+  const calls = [];
+  const { context, element } = setup(async (url, options) => {
+    calls.push({ url, options });
+    return { status: 204 };
+  });
+  vm.runInContext("currentRole = 'owner'", context);
+  context.confirm = () => false;
+  const button = element('deleteButton');
+  await context.deleteAnalysis('42', 'reporte.pdf', button);
+  assert.equal(calls.length, 0);
+  assert.equal(button.disabled, false);
+});
+
+test('report deletion requires manager role, uses bearer DELETE, refreshes and reports success', async () => {
+  const calls = [];
+  const { context, element } = setup(async (url, options = {}) => {
+    calls.push({ url, options });
+    if (options.method === 'DELETE') return { status: 204 };
+    return { ok: true, json: async () => ({ total: 0, items: [] }) };
+  });
+  const button = element('deleteButton');
+  vm.runInContext("currentRole = 'employee'", context);
+  await context.deleteAnalysis('42', 'doc.pdf', button);
+  assert.equal(calls.length, 0);
+  vm.runInContext("currentRole = 'owner'", context);
+  await context.deleteAnalysis('42', 'doc.pdf', button);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, '/analyses/42');
+  assert.equal(calls[0].options.method, 'DELETE');
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer frontend-only-test-token');
+  assert.match(calls[1].url, /^\/analyses\?/);
+  assert.match(element('historySuccess').textContent, /Informe eliminado/);
+  assert.equal(element('historyError').textContent, '');
+  assert.equal(button.disabled, false);
+});
+
+test('concurrent clicks cannot delete twice and failures do not expose server internals', async () => {
+  let resolve;
+  const calls = [];
+  const { context, element } = setup((url, options) => {
+    calls.push(url);
+    return new Promise(r => { resolve = r; });
+  });
+  vm.runInContext("currentRole = 'admin'", context);
+  const button = element('deleteButton');
+  const first = context.deleteAnalysis(42, 'doc.pdf', button);
+  await context.deleteAnalysis(42, 'doc.pdf', button);
+  assert.deepEqual(calls, ['/analyses/42']);
+  assert.equal(button.disabled, true);
+  resolve({ status: 500, json: async () => ({ detail: 'private SQL error' }) });
+  await first;
+  assert.equal(button.disabled, false);
+  assert.match(element('historyError').textContent, /No se pudo eliminar/);
+  assert.doesNotMatch(element('historyError').textContent, /private SQL/);
+});
+
+test('logout during report deletion does not restore private history or show notices', async () => {
+  let resolve;
+  const { context, element } = setup(() => new Promise(r => { resolve = r; }));
+  vm.runInContext("currentRole = 'owner'", context);
+  const first = context.deleteAnalysis(42, 'doc.pdf', element('deleteButton'));
+  context.logout();
+  resolve({ status: 204 });
+  await first;
+  assert.equal(element('historySuccess').textContent, '');
+  assert.equal(element('historyBody').innerHTML, '');
+});

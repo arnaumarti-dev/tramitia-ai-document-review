@@ -65,7 +65,13 @@ confirmar su existencia. Al borrarlo, debe desaparecer del historial,
 detalle y exportación. Repite la prueba con informes ficticios, nunca
 con archivos de clientes.
 
-La interfaz web todavía no incluye un botón de borrado. El endpoint no
+La interfaz web muestra **Eliminar** junto a cada JSON únicamente al
+propietario o administrador. Debe pedir confirmación antes de enviar la
+petición y actualizar el historial después de un HTTP 204. Un empleado no
+debe ver el botón y tampoco puede usar el endpoint por API. Para la
+demostración, elimina solo un informe ficticio y comprueba que ha desaparecido.
+
+El endpoint no
 elimina copias JSON que alguien haya descargado, backups ni registros de
 otros sistemas. Una política formal de conservación, borrado de copias de
 seguridad y registros de auditoría sigue siendo necesaria antes de producción.

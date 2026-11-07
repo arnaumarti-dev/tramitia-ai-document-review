@@ -9,8 +9,13 @@ const API = ""; // relative API: same backend that serves this frontend
     let currentRole = null;
     let staffMutationInProgress = false;
     let pendingInviteToken = null;
+    let deletionInProgress = false;
+    let historyRequestSequence = 0;
+    let latestAnalysisId = null;
 
     function logout() {
+      ++historyRequestSequence; // Invalidate pending history responses.
+      latestAnalysisId = null;
       authToken = null;
       currentUserId = null;
       currentRole = null;
@@ -27,6 +32,8 @@ const API = ""; // relative API: same backend that serves this frontend
       $("loginPanel").hidden = false;
       $("loginPassword").value = "";
       $("historyBody").innerHTML = "";
+      $("historyError").textContent = "";
+      $("historySuccess").textContent = "";
       $("analysisCard").innerHTML = "";
       $("sessionInfo").textContent = "";
       closeModal();
@@ -348,6 +355,7 @@ const API = ""; // relative API: same backend that serves this frontend
     }
 
     function renderAnalysis(data) {
+      latestAnalysisId = data.id ?? null;
       const score = clampScore(data.score);
       const color = scoreColor(score);
       const findings = data.findings || [];
@@ -448,6 +456,8 @@ const API = ""; // relative API: same backend that serves this frontend
 
     async function loadAnalyses(resetOffset = false) {
       if (resetOffset) offset = 0;
+      const requestToken = authToken;
+      const requestSequence = ++historyRequestSequence;
 
       try {
         const res = await apiFetch("/analyses?" + buildQuery());
@@ -457,6 +467,9 @@ const API = ""; // relative API: same backend that serves this frontend
         }
 
         const data = await res.json();
+        // Responses from before logout or a more recent refresh are stale.
+        if (!authToken || authToken !== requestToken ||
+            requestSequence !== historyRequestSequence) return false;
         total = Number(data.total || 0);
         const items = data.items || [];
 
@@ -469,7 +482,12 @@ const API = ""; // relative API: same backend that serves this frontend
                 <td>${statusBadge(a.status)}</td>
                 <td class="right"><strong>${escapeHtml(a.score ?? "")}</strong></td>
                 <td class="right">
-                  <button class="export-link" type="button" data-export-id="${escapeHtml(a.id)}">JSON</button>
+                  <span class="history-actions">
+                    <button class="export-link" type="button" data-export-id="${escapeHtml(a.id)}">JSON</button>
+                    ${(currentRole === "owner" || currentRole === "admin")
+                      ? `<button class="delete-link" type="button" data-delete-id="${escapeHtml(a.id)}" data-delete-filename="${escapeHtml(a.filename)}" aria-label="Eliminar informe ${escapeHtml(a.filename)}">Eliminar</button>`
+                      : ""}
+                  </span>
                 </td>
               </tr>
             `).join("")
@@ -481,6 +499,12 @@ const API = ""; // relative API: same backend that serves this frontend
             downloadExport(button.dataset.exportId);
           });
         });
+        document.querySelectorAll("#historyBody button[data-delete-id]").forEach((button) => {
+          button.addEventListener("click", (event) => {
+            event.stopPropagation();
+            deleteAnalysis(button.dataset.deleteId, button.dataset.deleteFilename, button);
+          });
+        });
         document.querySelectorAll("#historyBody tr[data-id]").forEach((row) => {
           row.addEventListener("click", () => openDetail(row.dataset.id));
         });
@@ -488,7 +512,10 @@ const API = ""; // relative API: same backend that serves this frontend
         const from = total === 0 ? 0 : offset + 1;
         const to = Math.min(offset + limit, total);
         $("pageInfo").textContent = `Mostrando ${from}-${to} de ${total}`;
+        return true;
       } catch (error) {
+        if (authToken !== requestToken ||
+            requestSequence !== historyRequestSequence) return false;
         $("historyBody").innerHTML = `
           <tr>
             <td colspan="6">
@@ -499,6 +526,54 @@ const API = ""; // relative API: same backend that serves this frontend
             </td>
           </tr>
         `;
+        return false;
+      }
+    }
+
+    async function deleteAnalysis(id, filename, button = null) {
+      if (!authToken || deletionInProgress ||
+          (currentRole !== "owner" && currentRole !== "admin")) return;
+      const numericId = Number(id);
+      if (!Number.isSafeInteger(numericId) || numericId <= 0) return;
+      const label = String(filename || "este informe");
+      if (!confirm(`¿Eliminar definitivamente "${label}"? Esta acción no se puede deshacer.`)) return;
+
+      const requestToken = authToken;
+      deletionInProgress = true;
+      if (button) button.disabled = true;
+      $("historyError").textContent = "";
+      $("historySuccess").textContent = "";
+      try {
+        const response = await apiFetch("/analyses/" + encodeURIComponent(numericId), {
+          method: "DELETE"
+        });
+        if (authToken !== requestToken) return;
+        if (response.status !== 204) {
+          if (response.status === 403) throw new Error("No tienes permisos para eliminar informes.");
+          if (response.status === 404) throw new Error("El informe ya no existe o no pertenece a esta gestoría.");
+          throw new Error("No se pudo eliminar el informe. Inténtalo de nuevo.");
+        }
+
+        if (Number(latestAnalysisId) === numericId && latestAnalysisId !== null) {
+          latestAnalysisId = null;
+          $("analysisCard").innerHTML = '<div class="empty-state"><strong>Informe eliminado</strong>El informe ya no figura en el historial.</div>';
+        }
+        closeModal();
+        if (offset > 0 && total <= offset + 1) {
+          offset = Math.max(0, offset - limit);
+        }
+        const refreshed = await loadAnalyses(false);
+        if (authToken !== requestToken) return;
+        $("historySuccess").textContent = refreshed
+          ? "Informe eliminado de la gestoría. Las exportaciones y copias de seguridad no se eliminan."
+          : "Informe eliminado, pero no se pudo actualizar el historial. Pulsa Actualizar.";
+      } catch (error) {
+        if (authToken === requestToken) {
+          $("historyError").textContent = error.message || "No se pudo eliminar el informe.";
+        }
+      } finally {
+        deletionInProgress = false;
+        if (button) button.disabled = false;
       }
     }
 
