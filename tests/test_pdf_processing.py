@@ -97,6 +97,34 @@ class PDFWorkerFailureTests(unittest.TestCase):
         with patch("app.pdf_processing._run_bounded_worker", side_effect=fake_run):
             self.assertEqual(parse_pdf_document(b"%PDF-1.7"), ("fictitious", 1))
 
+    def test_socket_response_drip_is_bounded_by_one_deadline(self):
+        """A peer must not keep the worker slot by returning one byte forever."""
+        from app.pdf_processing import _request_fixed_socket
+        with patch("app.pdf_processing.socket.socket") as factory, patch(
+            "app.pdf_processing.time.monotonic", side_effect=[0, 1, 2, 3, 21]
+        ):
+            connection = factory.return_value.__enter__.return_value
+            connection.recv.return_value = b"x"
+            with self.assertRaises(PdfProcessingError) as error:
+                _request_fixed_socket(
+                    b"%PDF-fictional", 1, 100,
+                    target="/run/tramitia/pdf-broker.sock",
+                )
+        self.assertEqual(error.exception.status_code, 503)
+        connection.sendall.assert_called_once()
+        # One byte arrived, then the absolute 20-second budget expired.
+        self.assertEqual(connection.recv.call_count, 1)
+
+        # A failed broker exchange must not leave the API's worker slot held.
+        with patch.dict(os.environ, {"TRAMITIA_PDF_WORKER_BACKEND": "broker"}), patch(
+            "app.pdf_processing._broker_request",
+            return_value=b'{"pages":1,"text":"fictional successful retry"}'
+        ):
+            self.assertEqual(
+                parse_pdf_document(b"%PDF-fictional"),
+                ("fictional successful retry", 1),
+            )
+
     def test_broker_forwards_to_distinct_parser_socket_without_launching_worker(self):
         with patch.dict(os.environ, {
             "TRAMITIA_PDF_WORKER_BACKEND": "parser_socket",

@@ -97,9 +97,24 @@ _BROKER_ERRORS = {
 }
 
 
-def _read_broker_exact(connection: socket.socket, length: int) -> bytes:
+def _remaining_socket_timeout(connection: socket.socket, deadline: float) -> None:
+    """Bound a whole socket exchange, even when a peer drip-feeds each recv.
+
+    Socket timeouts alone cap each individual operation, NOT total duration.
+    Use one monotonic deadline shared by connect, send and all response reads.
+    """
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("PDF socket exchange exceeded its total deadline")
+    connection.settimeout(remaining)
+
+
+def _read_broker_exact(
+    connection: socket.socket, length: int, *, deadline: float
+) -> bytes:
     data = bytearray()
     while len(data) < length:
+        _remaining_socket_timeout(connection, deadline)
         chunk = connection.recv(min(65536, length - len(data)))
         if not chunk:
             raise ConnectionError("Broker connection was closed")
@@ -119,9 +134,10 @@ def _request_fixed_socket(
     """
     if not hasattr(socket, "AF_UNIX") or not Path(target).is_absolute():
         raise PdfProcessingError(503, "Ruta o servicio PDF aislado no válido.")
+    deadline = time.monotonic() + MAX_WORKER_SECONDS + 5
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-            connection.settimeout(MAX_WORKER_SECONDS + 5)
+            _remaining_socket_timeout(connection, deadline)
             connection.connect(target)
             if expected_peer_uid is not None:
                 if sys.platform != "linux" or not hasattr(socket, "SO_PEERCRED"):
@@ -136,11 +152,14 @@ def _request_fixed_socket(
                     raise PdfProcessingError(
                         503, "El servicio de análisis no tiene la identidad esperada."
                     )
+            _remaining_socket_timeout(connection, deadline)
             connection.sendall(struct.pack("!III", len(data), max_pages, max_chars) + data)
-            size = struct.unpack("!I", _read_broker_exact(connection, 4))[0]
+            size = struct.unpack(
+                "!I", _read_broker_exact(connection, 4, deadline=deadline)
+            )[0]
             if size > MAX_WORKER_STDOUT_BYTES or size == 0:
                 raise ValueError("Oversized socket output")
-            return _read_broker_exact(connection, size)
+            return _read_broker_exact(connection, size, deadline=deadline)
     except (OSError, ConnectionError, TimeoutError) as exc:
         raise PdfProcessingError(
             503, "No se pudo contactar con el servicio aislado de PDF."
