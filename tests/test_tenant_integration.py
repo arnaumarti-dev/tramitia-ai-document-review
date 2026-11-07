@@ -1,17 +1,16 @@
 """Real PostgreSQL isolation tests. Enabled with TRAMITIA_TEST_POSTGRES=1."""
-import io
 import os
 import unittest
 import uuid
 
 from fastapi.testclient import TestClient
-from pypdf import PdfWriter
 
 from app.auth import Principal, hash_password, issue_token
 from app.db import get_conn
 from app.main import app
 from app.repository import save_analysis
 from scripts.manage_staff import add_staff, disable_staff, list_staff
+from scripts.generate_demo_pdf import make_demo_pdf
 
 
 @unittest.skipUnless(os.getenv("TRAMITIA_TEST_POSTGRES") == "1", "PostgreSQL integration tests disabled")
@@ -74,11 +73,9 @@ class TenantIsolationIntegrationTests(unittest.TestCase):
 
     @staticmethod
     def pdf():
-        writer = PdfWriter()
-        writer.add_blank_page(width=200, height=200)
-        buf = io.BytesIO()
-        writer.write(buf)
-        return buf.getvalue()
+        # Tenant isolation needs a genuine, searchable fictional document.
+        # Blank PDFs are now correctly rejected as requiring OCR/inspection.
+        return make_demo_pdf()
 
     def test_login_and_wrong_organization(self):
         user_id, email = self.users[0]

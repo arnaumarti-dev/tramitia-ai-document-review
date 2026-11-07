@@ -274,6 +274,18 @@ def analyze(request: Request, file: UploadFile = File(...), principal: Principal
             status_code=exc.status_code, detail=exc.message,
         ) from exc
 
+    # A blank or image-only PDF is parseable but has no selectable text.
+    # Do not create a misleading risk score for a document we cannot inspect.
+    # This is not proof of a scan: it may also be a genuinely blank PDF.
+    if not text.strip():
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "El PDF no contiene texto extraíble. Puede estar escaneado o vacío. "
+                "Utiliza OCR o sube una versión con texto seleccionable."
+            ),
+        )
+
     # hash del texto extraído (auditoría)
     text_sha256 = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
 

@@ -8,6 +8,10 @@ TramitIA is a **local MVP** for reviewing administrative PDF documents, focused 
 
 - Sign in to a specific organization and upload PDFs (up to 20 MiB, 50 pages, and 200,000 extracted text characters) from a web dashboard.
 - Extract text from PDFs with `pypdf`.
+- Reject PDFs that contain no extractable text with HTTP 422 and a clear
+  OCR/scan warning, instead of saving a misleading validation report. This
+  **does not perform OCR** and cannot distinguish an image-only scan from a
+  genuinely blank document.
 - Run rule-based validations for subsidy application documents.
 - Generate a risk score (`0-100`) and status (`OK`, `REVISAR`, `RIESGO`).
 - Store organization-scoped metadata and findings in PostgreSQL (raw extracted text is not stored for new analyses).
@@ -199,7 +203,10 @@ Base URL: `http://127.0.0.1:8000`
   - Requires `Authorization: Bearer <token>`. Returns user, organization and role.
 - `POST /analyze`
   - Multipart upload (`file`) of a PDF.
-  - Returns summarized analysis result.
+  - Returns summarized analysis result when text can be extracted.
+  - HTTP 422 if no extractable text is present (potential scanned/image-only
+    or blank PDF). No analysis result is saved in this case; use OCR externally
+    or obtain a searchable PDF before retrying.
   - HTTP 400: empty, unreadable or encrypted PDF, or invalid Content-Length; HTTP 413: file exceeds 20 MiB or multipart request exceeds 21 MiB.
   - Parsing and database work run outside the async event loop. PDF extraction runs in a bounded child process or isolated broker; request-body size is additionally checked at ASGI level. PDF decompression and production ingress still need defense in depth.
 
