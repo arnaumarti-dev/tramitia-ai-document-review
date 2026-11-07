@@ -135,7 +135,10 @@ def _docker_postgres(*arguments: str, directory: str, password: str):
         "--user", f"{os.getuid()}:{os.getgid()}",
         "-e", "PGPASSWORD",
         "--mount", f"type=bind,src={directory},dst=/backup",
-        "postgres:16", *arguments,
+        # pg_dump normally uses the process umask for output files.
+        # Force 0600 creation instead of relying on container defaults.
+        "postgres:16", "sh", "-c", 'umask 077; exec "$@"',
+        "tramitia-ci-backup", *arguments,
     ]
     subprocess.run(command, check=True, timeout=150, env=env)
 
