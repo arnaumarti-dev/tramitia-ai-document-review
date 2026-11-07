@@ -79,7 +79,8 @@ sudo systemctl start tramitia-web.service
 ```
 
 The web unit explicitly enables `TRAMITIA_DEPLOYMENT_PROFILE=isolated`,
-which refuses to start if running as root, using the subprocess/container
+which refuses to start if PostgreSQL/JWT settings are absent or use development
+placeholders, if running as root, using the subprocess/container
 backend directly, accessing the local Docker socket or missing a valid
 private broker socket. If the broker goes away later, uploads fail closed
 with 503. **This startup check catches accidents; it is not a sandbox.**

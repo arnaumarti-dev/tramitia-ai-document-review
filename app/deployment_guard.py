@@ -13,12 +13,38 @@ import stat
 import sys
 
 
+def _require_explicit_isolated_secrets() -> None:
+    """Refuse accidental development DB credentials in isolated deployments.
+
+    Development defaults are intentionally retained for the local example,
+    but they must never silently become production credentials. The secret
+    values are neither printed nor included in error messages.
+    """
+    required = (
+        "POSTGRES_HOST", "POSTGRES_DB", "POSTGRES_USER",
+        "POSTGRES_PASSWORD", "TRAMITIA_JWT_SECRET",
+    )
+    for name in required:
+        if not os.environ.get(name, "").strip():
+            raise RuntimeError(f"Isolated deployment requires explicit {name}")
+    password = os.environ["POSTGRES_PASSWORD"].strip()
+    jwt_secret = os.environ["TRAMITIA_JWT_SECRET"].strip()
+    prohibited = {"tramitia", "password", "changeme", "replace_with_secret"}
+    if password.lower() in prohibited:
+        raise RuntimeError("Isolated deployment refuses a default database password")
+    if (len(jwt_secret) < 32
+            or jwt_secret.lower() in prohibited
+            or jwt_secret.startswith("REPLACE_WITH_")):
+        raise RuntimeError("Isolated deployment requires a non-placeholder JWT secret")
+
+
 def validate_web_deployment() -> None:
     profile = os.getenv("TRAMITIA_DEPLOYMENT_PROFILE", "development")
     if profile == "development":
         return
     if profile != "isolated":
         raise RuntimeError("Unknown TramitIA deployment profile")
+    _require_explicit_isolated_secrets()
 
     if sys.platform != "linux" or not hasattr(os, "geteuid"):
         raise RuntimeError("Isolated deployments require Linux/POSIX")

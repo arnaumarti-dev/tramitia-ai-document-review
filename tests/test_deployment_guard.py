@@ -31,6 +31,11 @@ class IsolatedWebStartupTests(unittest.TestCase):
             "TRAMITIA_DEPLOYMENT_PROFILE": "isolated",
             "TRAMITIA_PDF_WORKER_BACKEND": "broker",
             "TRAMITIA_BROKER_SOCKET": self.path,
+            "POSTGRES_HOST": "localhost",
+            "POSTGRES_DB": "tramitia_test",
+            "POSTGRES_USER": "tramitia",
+            "POSTGRES_PASSWORD": "fictional-ci-only-db-secret-value",
+            "TRAMITIA_JWT_SECRET": "fictional-ci-only-jwt-secret-1234567890",
         })
         self.env.start()
         self.addCleanup(self.env.stop)
@@ -142,6 +147,33 @@ class IsolatedWebStartupTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(RuntimeError, "distinct non-root"):
                 validate_web_deployment()
+
+    def test_isolated_profile_never_accepts_implicit_development_database_defaults(self):
+        # An empty or predictable password is not a valid isolated deployment.
+        for name, bad_value in (
+            ("POSTGRES_HOST", ""),
+            ("POSTGRES_DB", ""),
+            ("POSTGRES_USER", ""),
+            ("POSTGRES_PASSWORD", ""),
+            ("POSTGRES_PASSWORD", "tramitia"),
+            ("POSTGRES_PASSWORD", "REPLACE_WITH_SECRET"),
+            ("TRAMITIA_JWT_SECRET", ""),
+            ("TRAMITIA_JWT_SECRET", "too-short"),
+            ("TRAMITIA_JWT_SECRET", "REPLACE_WITH_64_PLUS_RANDOM_HEX_CHARACTERS"),
+        ):
+            with self.subTest(name=name, bad_value=bad_value), patch.dict(
+                os.environ, {name: bad_value}
+            ):
+                with self.assertRaisesRegex(RuntimeError, "Isolated deployment"):
+                    validate_web_deployment()
+
+    def test_development_profile_remains_usable_without_production_secrets(self):
+        with patch.dict(os.environ, {
+            "TRAMITIA_DEPLOYMENT_PROFILE": "development",
+            "POSTGRES_PASSWORD": "",
+            "TRAMITIA_JWT_SECRET": "",
+        }):
+            validate_web_deployment()
 
     def test_unknown_profile_is_rejected(self):
         with patch.dict(os.environ, {

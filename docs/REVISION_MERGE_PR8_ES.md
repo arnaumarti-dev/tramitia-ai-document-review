@@ -21,6 +21,9 @@ producción ni sustituye una revisión independiente del código.
   (otro repositorio, `autoDeploy=off`) no despliegan TramitIA desde
   `main`. Comprobado el 7 de noviembre de 2026. Esto no acredita
   configuraciones de otros hosts o proveedores.
+- [x] El perfil `isolated` requiere credenciales explícitas de PostgreSQL
+  y JWT al arrancar; no acepta la contraseña de desarrollo ni placeholders.
+  El perfil local `development` conserva sus valores de demostración.
 - [x] Revisión focalizada del enlace API-broker: el perfil aislado ahora
   impide que la cuenta web sea propietaria o tenga escritura sobre el
   directorio privado, y comprueba la identidad del broker por SO_PEERCRED
