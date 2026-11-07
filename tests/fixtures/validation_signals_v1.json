@@ -1,0 +1,267 @@
+{
+  "schema_version": 1,
+  "description": "Synthetic textual signal annotations only; NOT ground truth of identity, signed status, legal validity or PDF OCR quality.",
+  "tracked_codes": [
+    "INVALID_ID_CONTROL",
+    "MISSING_ID",
+    "INVALID_DATE",
+    "MISSING_DATE",
+    "SIGNATURE_REQUIRED",
+    "SIGNATURE_UNVERIFIED"
+  ],
+  "cases": [
+    {
+      "id": "dni_valid",
+      "category": "identifiers",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 07/11/2026. Firma de prueba.",
+      "expected_alerts": [
+        "SIGNATURE_UNVERIFIED"
+      ]
+    },
+    {
+      "id": "dni_bad_letter",
+      "category": "identifiers",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000A. Fecha 07/11/2026. Firma de prueba.",
+      "expected_alerts": [
+        "INVALID_ID_CONTROL",
+        "SIGNATURE_UNVERIFIED"
+      ]
+    },
+    {
+      "id": "nie_valid_lowercase",
+      "category": "identifiers",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. NIE x0000000t. Fecha 07/11/2026. Firma de prueba.",
+      "expected_alerts": [
+        "SIGNATURE_UNVERIFIED"
+      ]
+    },
+    {
+      "id": "nie_bad_letter",
+      "category": "identifiers",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. NIE X0000000Z. Fecha 07/11/2026. Firma de prueba.",
+      "expected_alerts": [
+        "INVALID_ID_CONTROL",
+        "SIGNATURE_UNVERIFIED"
+      ]
+    },
+    {
+      "id": "id_omitted",
+      "category": "identifiers",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. Identificación pendiente. Fecha 07/11/2026. Firma de prueba.",
+      "expected_alerts": [
+        "MISSING_ID",
+        "SIGNATURE_UNVERIFIED"
+      ]
+    },
+    {
+      "id": "id_not_provided",
+      "category": "identifiers",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. No consta identificador de solicitante. Fecha 07/11/2026. Firma de prueba.",
+      "expected_alerts": [
+        "MISSING_ID",
+        "SIGNATURE_UNVERIFIED"
+      ]
+    },
+    {
+      "id": "two_ids_one_invalid",
+      "category": "identifiers",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T y NIE X0000000Z. Fecha 07/11/2026. Firma.",
+      "expected_alerts": [
+        "INVALID_ID_CONTROL",
+        "SIGNATURE_UNVERIFIED"
+      ]
+    },
+    {
+      "id": "date_feb_31",
+      "category": "dates",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 31/02/2026. Firma.",
+      "expected_alerts": [
+        "INVALID_DATE",
+        "SIGNATURE_UNVERIFIED"
+      ]
+    },
+    {
+      "id": "date_month_13",
+      "category": "dates",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 2026-13-01. Firma.",
+      "expected_alerts": [
+        "INVALID_DATE",
+        "SIGNATURE_UNVERIFIED"
+      ]
+    },
+    {
+      "id": "date_leap_valid",
+      "category": "dates",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 29/02/2024. Firma.",
+      "expected_alerts": [
+        "SIGNATURE_UNVERIFIED"
+      ]
+    },
+    {
+      "id": "date_leap_invalid",
+      "category": "dates",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 29/02/2025. Firma.",
+      "expected_alerts": [
+        "INVALID_DATE",
+        "SIGNATURE_UNVERIFIED"
+      ]
+    },
+    {
+      "id": "date_iso_valid",
+      "category": "dates",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 2026-11-07. Firma.",
+      "expected_alerts": [
+        "SIGNATURE_UNVERIFIED"
+      ]
+    },
+    {
+      "id": "date_two_digit_year",
+      "category": "dates",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 01/02/26. Firma.",
+      "expected_alerts": [
+        "MISSING_DATE",
+        "SIGNATURE_UNVERIFIED"
+      ]
+    },
+    {
+      "id": "date_omitted",
+      "category": "dates",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. La fecha no se ha incluido. Firma.",
+      "expected_alerts": [
+        "MISSING_DATE",
+        "SIGNATURE_UNVERIFIED"
+      ]
+    },
+    {
+      "id": "date_mixed_valid_invalid",
+      "category": "dates",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fechas 07/11/2026 y 31/02/2026. Firma.",
+      "expected_alerts": [
+        "INVALID_DATE",
+        "SIGNATURE_UNVERIFIED"
+      ]
+    },
+    {
+      "id": "signature_absent",
+      "category": "signatures",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 07/11/2026. No se menciona ninguna rúbrica.",
+      "expected_alerts": [
+        "SIGNATURE_REQUIRED"
+      ]
+    },
+    {
+      "id": "signature_sin_firma",
+      "category": "signatures",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 07/11/2026. Sin firma.",
+      "expected_alerts": [
+        "SIGNATURE_REQUIRED"
+      ]
+    },
+    {
+      "id": "signature_falta",
+      "category": "signatures",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 07/11/2026. Falta la firma.",
+      "expected_alerts": [
+        "SIGNATURE_REQUIRED"
+      ]
+    },
+    {
+      "id": "signature_pendiente",
+      "category": "signatures",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 07/11/2026. Pendiente de firma.",
+      "expected_alerts": [
+        "SIGNATURE_REQUIRED"
+      ]
+    },
+    {
+      "id": "signature_no_firmado",
+      "category": "signatures",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 07/11/2026. No está firmado.",
+      "expected_alerts": [
+        "SIGNATURE_REQUIRED"
+      ]
+    },
+    {
+      "id": "signature_no_consta",
+      "category": "signatures",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 07/11/2026. No consta la firma.",
+      "expected_alerts": [
+        "SIGNATURE_REQUIRED"
+      ]
+    },
+    {
+      "id": "signature_no_se_ha_firmado",
+      "category": "signatures",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 07/11/2026. No se ha firmado.",
+      "expected_alerts": [
+        "SIGNATURE_REQUIRED"
+      ]
+    },
+    {
+      "id": "signature_sin_datos",
+      "category": "signatures",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 07/11/2026. Sin datos de firma.",
+      "expected_alerts": [
+        "SIGNATURE_REQUIRED"
+      ]
+    },
+    {
+      "id": "signature_claim_firmado",
+      "category": "signatures",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 07/11/2026. El formulario figura firmado.",
+      "expected_alerts": [
+        "SIGNATURE_UNVERIFIED"
+      ]
+    },
+    {
+      "id": "signature_claim_opcional",
+      "category": "signatures",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 07/11/2026. La firma es opcional.",
+      "expected_alerts": [
+        "SIGNATURE_UNVERIFIED"
+      ]
+    },
+    {
+      "id": "signature_pendiente_post",
+      "category": "signatures",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 07/11/2026. Firma pendiente.",
+      "expected_alerts": [
+        "SIGNATURE_REQUIRED"
+      ]
+    },
+    {
+      "id": "signature_no_esta_firmada",
+      "category": "signatures",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 07/11/2026. La solicitud no está firmada.",
+      "expected_alerts": [
+        "SIGNATURE_REQUIRED"
+      ]
+    },
+    {
+      "id": "signature_requirement_only",
+      "category": "signatures",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 07/11/2026. Se requiere firma al presentar.",
+      "expected_alerts": [
+        "SIGNATURE_UNVERIFIED"
+      ]
+    },
+    {
+      "id": "signature_irrelevant_mentioned",
+      "category": "signatures",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000T. Fecha 07/11/2026. Firma de prueba ficticia.",
+      "expected_alerts": [
+        "SIGNATURE_UNVERIFIED"
+      ]
+    },
+    {
+      "id": "combined_bad_id_bad_date_unsigned",
+      "category": "mixed",
+      "text": "Solicitud de ayuda ficticia para probar señales textuales. Declaro datos exclusivamente inventados. Contacto demo@example.invalid. Calle Inventada 1. DNI 00000000A. Fecha 31/02/2026. No consta firma.",
+      "expected_alerts": [
+        "INVALID_ID_CONTROL",
+        "INVALID_DATE",
+        "SIGNATURE_REQUIRED"
+      ]
+    }
+  ]
+}
