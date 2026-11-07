@@ -223,6 +223,16 @@ class BrokerProtocolTests(unittest.TestCase):
             self.assertFalse(job.is_alive(), "Worker socket did not return")
             self.assertNotIn("exception", first, first.get("exception"))
             self.assertEqual(first["reply"], {"text": "PDF ficticio", "pages": 1})
+            # The client can receive the reply before the serving thread
+            # releases the global broker semaphore. Wait for the actual
+            # slot instead of assuming it is free when recv() returns.
+            for _ in range(200):
+                if self.server._request_slots.acquire(blocking=False):
+                    self.server._request_slots.release()
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail("Broker did not release its processing slot")
             self.assertEqual(
                 parse_pdf_document(sample), ("PDF ficticio", 1)
             )
