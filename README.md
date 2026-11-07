@@ -21,13 +21,15 @@ Preparar expedientes administrativos puede requerir revisar repetidamente docume
 | --- | --- |
 | Documentos | Subida de PDF con texto seleccionable, extracción con `pypdf` y límites de tamaño/recursos |
 | Revisión | Reglas para DNI/NIE, correo, teléfono, fecha, dirección y expresiones relacionadas con solicitud, declaración y firma |
-| Resultado | Hallazgos, severidad, recomendaciones orientativas, puntuación heurística de 0 a 100 y estado `OK` / `REVISAR` / `RIESGO` |
+| Resultado | Hallazgos, severidad, recomendaciones orientativas y puntuación heurística de 0 a 100 (no probabilidad de aprobación). Los análisis nuevos basados en reglas textuales solo pueden obtener `REVISAR` o `RIESGO`; `OK` puede aparecer en informes históricos |
 | Historial | Listado paginado, filtros, detalle y exportación JSON de informes |
 | Organizaciones | Cuentas y análisis separados por gestoría; comprobaciones de pertenencia y permisos en el servidor |
 | Equipo | Roles `owner`, `admin` y `employee`; invitaciones de un solo uso, desactivación de miembros y cambio de contraseña |
 | Auditoría parcial | Registro por organización de consultas de detalle, solicitudes de exportación y borrados de informes |
 | Controles de acceso | JWT de corta duración, contraseñas con Argon2id, revocación de sesión, cuotas de análisis y controles de frecuencia por conexión |
 | Calidad | Pruebas unitarias, integración PostgreSQL, frontend y recorrido E2E con Chromium en GitHub Actions |
+
+**Interpretación de alertas:** el control de la letra de un DNI/NIE y la comprobación de que una fecha es posible en el calendario son indicios textuales, no pruebas de identidad ni de autenticidad. Detectar las palabras «firma» o «firmado» tampoco demuestra que exista una firma válida: TramitIA no verifica firmas electrónicas. Toda revisión requiere evaluación humana, y las puntuaciones nunca acreditan validez legal o cumplimiento de una convocatoria.
 
 **Límites de entrada vigentes:** máximo 20 MiB por PDF, 50 páginas, 200.000 caracteres extraídos y 21 MiB para la solicitud multipart completa. Se aplican cuotas provisionales de 20 intentos por usuario/hora y 100 por organización/hora.
 
