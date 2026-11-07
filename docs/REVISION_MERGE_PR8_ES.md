@@ -11,16 +11,24 @@ producción ni sustituye una revisión independiente del código.
 - [x] La PR incorpora una batería de pruebas unitarias, de PostgreSQL,
   aislamiento de contenedores, Nginx y un recorrido completo con Chromium.
 - [ ] **Comprobar CI en el HEAD definitivo** antes de retirar el borrador.
-- [ ] **Actualización sin pérdida de datos:** ejecutar prueba de actualización
-  de Alembic `0003_invites_password_revision` a `head` con organización,
-  usuario y documento *ficticios* preexistentes. Esta prueba se ha añadido
-  a la CI; no se da por pasada hasta terminar el workflow.
-- [ ] Revisar que el servidor no se despliega automáticamente al fusionar
-  `main`; la demo ficticia de Render es un servicio separado.
+- [x] **Actualización sin pérdida de datos:** ejecución
+  [#42325827001](https://github.com/arnaumarti-dev/tramitia-ai-document-review/actions/runs/42325827001)
+  ha pasado la actualización de Alembic `0003_invites_password_revision`
+  a `head` conservando organización, usuario y documento ficticios.
+- [x] **Render, My Workspace:** los servicios existentes
+  `tramitia-demo-ficticia` (rama PR #8, `autoDeploy=off`,
+  `startCommand=python -m demo_private.server`) y `churn-mlops-demo`
+  (otro repositorio, `autoDeploy=off`) no despliegan TramitIA desde
+  `main`. Comprobado el 7 de noviembre de 2026. Esto no acredita
+  configuraciones de otros hosts o proveedores.
 - [ ] Solicitar revisión independiente de código, sobre todo autenticación,
   aislamiento del analizador, sockets Unix, rutas de borrado y permisos.
-- [ ] Confirmar estrategia de recuperación de base de datos y copia de
-  seguridad antes de migrar un servidor real.
+- [ ] **Restauración de base de datos:** la CI incorpora una comprobación
+  real de `pg_dump -Fc` y `pg_restore` en una base desechable separada,
+  con organización, usuario, informe y eventos de auditoría ficticios.
+  No se dará por superada hasta la CI del nuevo commit.
+- [ ] Confirmar backup cifrado, frecuencia, custodia, restauración
+  y ventana de mantenimiento antes de migrar un servidor real.
 
 ## Alcance del merge frente a uso comercial
 
