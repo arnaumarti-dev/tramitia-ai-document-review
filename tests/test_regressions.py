@@ -253,12 +253,12 @@ class AuthorizationTests(unittest.TestCase):
             with patch("app.main.get_analysis_by_id", return_value=None) as detail:
                 response = self.client.get("/analyses/999", headers=AUTH_HEADERS)
                 self.assertEqual(response.status_code, 404)
-                detail.assert_called_once_with(999, 21)
+                detail.assert_called_once_with(999, 21, 11)
 
             with patch("app.main.get_analysis_export", return_value=None) as export:
                 response = self.client.get("/analyses/999/export", headers=AUTH_HEADERS)
                 self.assertEqual(response.status_code, 404)
-                export.assert_called_once_with(999, 21)
+                export.assert_called_once_with(999, 21, 11)
 
     def test_wrong_secret_rejects_token(self):
         with patch.dict(os.environ, {"TRAMITIA_JWT_SECRET": "another-valid-secret-with-more-than-32-chars"}):

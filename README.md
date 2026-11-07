@@ -219,6 +219,9 @@ Base URL: `http://127.0.0.1:8000`
   - Exports and backups are not deleted by this operation; review retention obligations before production.
 - `GET /audit/deletions`
   - Owner/admin only; paginated and tenant-scoped deletion events, no document contents, filename or IP.
+- `GET /audit/accesses`
+  - Owner/admin only; tenant-scoped events for successful detail views and export requests, without document contents or filename.
+  - The export event records a request, not proof of a completed download; list views and failed attempts are not logged.
   - Audit retention is not automated. See [draft data and retention policy](docs/DATOS_Y_RETENCION_ES.md).
 
 ## Example Response (`POST /analyze`)

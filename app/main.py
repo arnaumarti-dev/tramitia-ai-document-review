@@ -35,6 +35,7 @@ from app.repository import (
     get_analysis_export,
     delete_analysis,
     list_deletion_events,
+    list_access_events,
 )
 
 @asynccontextmanager
@@ -303,7 +304,7 @@ def analyze(request: Request, file: UploadFile = File(...), principal: Principal
 
 @app.get("/analyses/{analysis_id}")
 def get_analysis(analysis_id: int, principal: Principal = Depends(current_principal)):
-    row = get_analysis_by_id(analysis_id, principal.organization_id)
+    row = get_analysis_by_id(analysis_id, principal.organization_id, principal.user_id)
     if not row:
         raise HTTPException(status_code=404, detail="Analysis not found")
     return row
@@ -329,9 +330,19 @@ def deletion_audit(
     return list_deletion_events(principal.organization_id, limit=limit, offset=offset)
 
 
+@app.get("/audit/accesses")
+def access_audit(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    principal: Principal = Depends(require_staff_manager),
+):
+    # Client cannot select organization, actor or arbitrary event types.
+    return list_access_events(principal.organization_id, limit=limit, offset=offset)
+
+
 @app.get("/analyses/{analysis_id}/export")
 def export_analysis(analysis_id: int, principal: Principal = Depends(current_principal)):
-    row = get_analysis_export(analysis_id, principal.organization_id)
+    row = get_analysis_export(analysis_id, principal.organization_id, principal.user_id)
     if not row:
         raise HTTPException(status_code=404, detail="Analysis not found")
 
