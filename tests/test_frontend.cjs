@@ -351,3 +351,69 @@ test('logout during report deletion does not restore private history or show not
   assert.equal(element('historySuccess').textContent, '');
   assert.equal(element('historyBody').innerHTML, '');
 });
+
+test('stale 401 response cannot log out a newly authenticated session', async () => {
+  let finish;
+  const { context } = setup(() => new Promise(resolve => { finish = resolve; }));
+  const oldRequest = context.apiFetch('/analyses');
+  context.logout();
+  vm.runInContext("authToken = 'new-session'", context);
+  finish({ status: 401 });
+  await assert.rejects(oldRequest, /La sesión ha caducado/);
+  assert.equal(vm.runInContext('authToken', context), 'new-session');
+});
+
+test('late report detail never renders tenant A data in tenant B session', async () => {
+  let finish;
+  const { context, element } = setup(() => new Promise(resolve => { finish = resolve; }));
+  const oldRequest = context.openDetail(123);
+  context.logout();
+  vm.runInContext("authToken = 'new-session'", context);
+  finish({ ok: true, json: async () => ({
+    id: 123, filename: 'tenant-A-private.pdf', score: 91, findings: []
+  }) });
+  await oldRequest;
+  assert.doesNotMatch(element('modalSubtitle').textContent, /tenant-A-private/);
+  assert.equal(element('modalContent').innerHTML, '');
+});
+
+test('late analysis does not repaint UI or refresh history after logout', async () => {
+  let finish;
+  const calls = [];
+  const { context, element } = setup(url => {
+    calls.push(url);
+    return new Promise(resolve => { finish = resolve; });
+  });
+  const oldRequest = context.analyze();
+  context.logout();
+  vm.runInContext("authToken = 'new-session'", context);
+  finish({ ok: true, json: async () => ({
+    id: 5, filename: 'tenant-A-private.pdf', score: 93, findings: []
+  }) });
+  await oldRequest;
+  assert.deepEqual(calls, ['/analyze']);
+  assert.equal(element('analysisCard').innerHTML, '');
+});
+
+test('late export does not download a prior tenant report', async () => {
+  let finish;
+  let alerts = 0;
+  const { context } = setup(() => new Promise(resolve => { finish = resolve; }));
+  context.alert = () => { alerts++; };
+  const oldRequest = context.downloadExport(123);
+  context.logout();
+  vm.runInContext("authToken = 'new-session'", context);
+  finish({ ok: true, blob: async () => { throw Error('Must not read old report blob'); } });
+  await oldRequest;
+  assert.equal(alerts, 0);
+});
+
+test('pending login cannot resurrect credentials after logout', async () => {
+  let finish;
+  const { context } = setup(() => new Promise(resolve => { finish = resolve; }));
+  const pending = context.login({ preventDefault() {} });
+  context.logout();
+  finish({ ok: true, json: async () => ({ access_token: 'stale-token' }) });
+  await pending;
+  assert.equal(vm.runInContext('authToken', context), null);
+});

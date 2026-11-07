@@ -12,13 +12,31 @@ const API = ""; // relative API: same backend that serves this frontend
     let deletionInProgress = false;
     let historyRequestSequence = 0;
     let latestAnalysisId = null;
+    // A reused bearer token still cannot revive a previous UI session.
+    let sessionGeneration = 0;
+    let loginRequestSequence = 0;
+
+    function isCurrentSession(token, generation) {
+      return Boolean(token) && authToken === token && sessionGeneration === generation;
+    }
 
     function logout() {
+      ++sessionGeneration; // Invalidate all in-flight UI work.
+      ++loginRequestSequence;
       ++historyRequestSequence; // Invalidate pending history responses.
       latestAnalysisId = null;
       authToken = null;
       currentUserId = null;
       currentRole = null;
+      analysisInProgress = false;
+      staffMutationInProgress = false;
+      deletionInProgress = false;
+      pendingInviteToken = null;
+      $("btnLogin").disabled = false;
+      $("btnAnalyze").disabled = false;
+      $("btnAddStaff").disabled = false;
+      $("btnChangePassword").disabled = false;
+      $("analysisCard").setAttribute("aria-busy", "false");
       $("staffPanel").hidden = true;
       $("staffBody").innerHTML = "";
       $("staffInviteLink").value = "";
@@ -40,13 +58,16 @@ const API = ""; // relative API: same backend that serves this frontend
     }
 
     async function apiFetch(path, options = {}) {
-      if (!authToken) throw new Error("Inicia sesión para continuar.");
+      const requestToken = authToken;
+      const requestGeneration = sessionGeneration;
+      if (!requestToken) throw new Error("Inicia sesión para continuar.");
       const res = await fetch(API + path, {
         ...options,
-        headers: { ...(options.headers || {}), Authorization: "Bearer " + authToken }
+        headers: { ...(options.headers || {}), Authorization: "Bearer " + requestToken }
       });
       if (res.status === 401) {
-        logout();
+        // A delayed 401 from user A must not log out user B.
+        if (isCurrentSession(requestToken, requestGeneration)) logout();
         throw new Error("La sesión ha caducado. Vuelve a iniciar sesión.");
       }
       return res;
@@ -54,6 +75,8 @@ const API = ""; // relative API: same backend that serves this frontend
 
     async function login(event) {
       event.preventDefault();
+      const attempt = ++loginRequestSequence;
+      const startingGeneration = sessionGeneration;
       const btn = $("btnLogin");
       btn.disabled = true;
       $("loginError").textContent = "";
@@ -72,7 +95,9 @@ const API = ""; // relative API: same backend that serves this frontend
         }
         if (!response.ok) throw new Error("No se pudo iniciar sesión. Comprueba tus credenciales.");
         const data = await response.json();
+        if (attempt !== loginRequestSequence || startingGeneration !== sessionGeneration) return;
         if (!data.access_token) throw new Error("El servidor no devolvió una sesión válida.");
+        ++sessionGeneration;
         authToken = data.access_token;
         currentUserId = data.user_id ?? null;
         currentRole = data.role ?? null;
@@ -84,12 +109,15 @@ const API = ""; // relative API: same backend that serves this frontend
         $("staffPanel").hidden = !mayManage;
         $("staffRoleAdmin").hidden = currentRole !== "owner";
         if (currentRole !== "owner") $("staffRole").value = "employee";
+        const newToken = authToken, newGeneration = sessionGeneration;
         await loadAnalyses(true);
-        if (mayManage) await loadStaff();
+        if (mayManage && isCurrentSession(newToken, newGeneration)) await loadStaff();
       } catch (error) {
-        $("loginError").textContent = error.message || "No se pudo iniciar sesión.";
+        if (attempt === loginRequestSequence) {
+          $("loginError").textContent = error.message || "No se pudo iniciar sesión.";
+        }
       } finally {
-        btn.disabled = false;
+        if (attempt === loginRequestSequence) btn.disabled = false;
       }
     }
 
@@ -412,6 +440,7 @@ const API = ""; // relative API: same backend that serves this frontend
 
     async function analyze() {
       if (analysisInProgress) return;
+      const requestToken = authToken, requestGeneration = sessionGeneration;
       const fileInput = $("file");
       if (!fileInput.files.length) {
         alert("Selecciona un PDF");
@@ -434,29 +463,36 @@ const API = ""; // relative API: same backend that serves this frontend
         form.append("file", fileInput.files[0]);
 
         const res = await apiFetch("/analyze", { method: "POST", body: form });
+        if (requestToken && !isCurrentSession(requestToken, requestGeneration)) return;
         if (!res.ok) {
           throw new Error(await uploadErrorMessage(res));
         }
 
         const data = await res.json();
+        if (requestToken && !isCurrentSession(requestToken, requestGeneration)) return;
         renderAnalysis(data);
         offset = 0;
         await loadAnalyses(false);
       } catch (error) {
-        const message = error instanceof TypeError
-          ? "No se pudo conectar con el servidor. Comprueba la conexión e inténtalo de nuevo."
-          : error.message;
-        renderError("analysisCard", "Error al analizar el PDF", message);
+        if (!requestToken || isCurrentSession(requestToken, requestGeneration)) {
+          const message = error instanceof TypeError
+            ? "No se pudo conectar con el servidor. Comprueba la conexión e inténtalo de nuevo."
+            : error.message;
+          renderError("analysisCard", "Error al analizar el PDF", message);
+        }
       } finally {
-        analysisInProgress = false;
-        $("btnAnalyze").disabled = false;
-        $("analysisCard").setAttribute("aria-busy", "false");
+        if (sessionGeneration === requestGeneration) {
+          analysisInProgress = false;
+          $("btnAnalyze").disabled = false;
+          $("analysisCard").setAttribute("aria-busy", "false");
+        }
       }
     }
 
     async function loadAnalyses(resetOffset = false) {
       if (resetOffset) offset = 0;
       const requestToken = authToken;
+      const requestGeneration = sessionGeneration;
       const requestSequence = ++historyRequestSequence;
 
       try {
@@ -468,7 +504,7 @@ const API = ""; // relative API: same backend that serves this frontend
 
         const data = await res.json();
         // Responses from before logout or a more recent refresh are stale.
-        if (!authToken || authToken !== requestToken ||
+        if (!isCurrentSession(requestToken, requestGeneration) ||
             requestSequence !== historyRequestSequence) return false;
         total = Number(data.total || 0);
         const items = data.items || [];
@@ -514,7 +550,7 @@ const API = ""; // relative API: same backend that serves this frontend
         $("pageInfo").textContent = `Mostrando ${from}-${to} de ${total}`;
         return true;
       } catch (error) {
-        if (authToken !== requestToken ||
+        if (!isCurrentSession(requestToken, requestGeneration) ||
             requestSequence !== historyRequestSequence) return false;
         $("historyBody").innerHTML = `
           <tr>
@@ -539,6 +575,7 @@ const API = ""; // relative API: same backend that serves this frontend
       if (!confirm(`¿Eliminar definitivamente "${label}"? Esta acción no se puede deshacer.`)) return;
 
       const requestToken = authToken;
+      const requestGeneration = sessionGeneration;
       deletionInProgress = true;
       if (button) button.disabled = true;
       $("historyError").textContent = "";
@@ -547,7 +584,7 @@ const API = ""; // relative API: same backend that serves this frontend
         const response = await apiFetch("/analyses/" + encodeURIComponent(numericId), {
           method: "DELETE"
         });
-        if (authToken !== requestToken) return;
+        if (!isCurrentSession(requestToken, requestGeneration)) return;
         if (response.status !== 204) {
           if (response.status === 403) throw new Error("No tienes permisos para eliminar informes.");
           if (response.status === 404) throw new Error("El informe ya no existe o no pertenece a esta gestoría.");
@@ -563,25 +600,30 @@ const API = ""; // relative API: same backend that serves this frontend
           offset = Math.max(0, offset - limit);
         }
         const refreshed = await loadAnalyses(false);
-        if (authToken !== requestToken) return;
+        if (!isCurrentSession(requestToken, requestGeneration)) return;
         $("historySuccess").textContent = refreshed
           ? "Informe eliminado de la gestoría. Las exportaciones y copias de seguridad no se eliminan."
           : "Informe eliminado, pero no se pudo actualizar el historial. Pulsa Actualizar.";
       } catch (error) {
-        if (authToken === requestToken) {
+        if (isCurrentSession(requestToken, requestGeneration)) {
           $("historyError").textContent = error.message || "No se pudo eliminar el informe.";
         }
       } finally {
-        deletionInProgress = false;
-        if (button) button.disabled = false;
+        if (isCurrentSession(requestToken, requestGeneration)) {
+          deletionInProgress = false;
+          if (button) button.disabled = false;
+        }
       }
     }
 
     async function openDetail(id) {
+      const requestToken = authToken, requestGeneration = sessionGeneration;
       try {
         const res = await apiFetch("/analyses/" + encodeURIComponent(id));
+        if (!isCurrentSession(requestToken, requestGeneration)) return;
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
+        if (!isCurrentSession(requestToken, requestGeneration)) return;
         const score = clampScore(data.score);
         const color = scoreColor(score);
         const findings = data.findings || [];
@@ -624,15 +666,18 @@ const API = ""; // relative API: same backend that serves this frontend
         $("modal").classList.add("open");
         $("modal").setAttribute("aria-hidden", "false");
       } catch (error) {
-        alert("No se pudo abrir el análisis.");
+        if (isCurrentSession(requestToken, requestGeneration)) alert("No se pudo abrir el análisis.");
       }
     }
 
     async function downloadExport(id) {
+      const requestToken = authToken, requestGeneration = sessionGeneration;
       try {
         const response = await apiFetch("/analyses/" + encodeURIComponent(id) + "/export");
+        if (!isCurrentSession(requestToken, requestGeneration)) return;
         if (!response.ok) throw new Error("No se pudo exportar este análisis.");
         const blob = await response.blob();
+        if (!isCurrentSession(requestToken, requestGeneration)) return;
         const objectUrl = URL.createObjectURL(blob);
         try {
           const link = document.createElement("a");
@@ -645,7 +690,9 @@ const API = ""; // relative API: same backend that serves this frontend
           URL.revokeObjectURL(objectUrl);
         }
       } catch (error) {
-        alert(error.message || "No se pudo descargar el informe.");
+        if (isCurrentSession(requestToken, requestGeneration)) {
+          alert(error.message || "No se pudo descargar el informe.");
+        }
       }
     }
 
