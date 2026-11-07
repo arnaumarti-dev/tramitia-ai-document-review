@@ -94,6 +94,37 @@ class PDFWorkerFailureTests(unittest.TestCase):
         with patch("app.pdf_processing._run_bounded_worker", side_effect=fake_run):
             self.assertEqual(parse_pdf_document(b"%PDF-1.7"), ("fictitious", 1))
 
+    def test_broker_forwards_to_distinct_parser_socket_without_launching_worker(self):
+        with patch.dict(os.environ, {
+            "TRAMITIA_PDF_WORKER_BACKEND": "parser_socket",
+            "TRAMITIA_PARSER_SOCKET": "/run/tramitia-parser/parser.sock",
+            "TRAMITIA_PARSER_ALLOWED_PEER_UID": "65533",
+        }), patch("app.pdf_processing.os.geteuid", return_value=65534), patch(
+            "app.pdf_processing._request_fixed_socket",
+            return_value=b'{"pages":1,"text":"Ejemplo ficticio"}'
+        ) as request, patch("app.pdf_processing._run_bounded_worker") as spawn:
+            self.assertEqual(parse_pdf_document(b"%PDF-demo"), ("Ejemplo ficticio", 1))
+        request.assert_called_once_with(
+            b"%PDF-demo", 50, 200000,
+            target="/run/tramitia-parser/parser.sock",
+            expected_peer_uid=65533,
+        )
+        spawn.assert_not_called()
+
+    def test_parser_socket_requires_distinct_explicit_uid(self):
+        for peer in ("", "65534", "0", "not-a-uid"):
+            with self.subTest(peer=peer), patch.dict(os.environ, {
+                "TRAMITIA_PDF_WORKER_BACKEND": "parser_socket",
+                "TRAMITIA_PARSER_SOCKET": "/run/tramitia-parser/parser.sock",
+                "TRAMITIA_PARSER_ALLOWED_PEER_UID": peer,
+            }), patch("app.pdf_processing.os.geteuid", return_value=65534), patch(
+                "app.pdf_processing._request_fixed_socket"
+            ) as connect:
+                with self.assertRaises(PdfProcessingError) as ctx:
+                    parse_pdf_document(b"%PDF-demo")
+                self.assertEqual(ctx.exception.status_code, 503)
+                connect.assert_not_called()
+
     def test_timeout_returns_controlled_failure(self):
         with patch("app.pdf_processing._run_bounded_worker",
                    side_effect=PdfProcessingError(422, "El análisis del PDF superó el tiempo máximo permitido.")):

@@ -228,8 +228,8 @@ def validate_broker_runtime() -> None:
         raise RuntimeError("Invalid daemonless broker mode")
     if sys.platform != "linux" or not hasattr(os, "geteuid"):
         raise RuntimeError("Daemonless broker requires a Linux sandbox")
-    if os.geteuid() == 0 or backend != "subprocess":
-        raise RuntimeError("Daemonless broker must be non-root using subprocess")
+    if os.geteuid() == 0 or backend not in ("subprocess", "parser_socket"):
+        raise RuntimeError("Daemonless broker must be non-root with a restricted parser")
     if any(name in os.environ for name in (
         "TRAMITIA_JWT_SECRET", "POSTGRES_PASSWORD",
         "DATABASE_URL", "DOCKER_HOST", "DOCKER_CONTEXT",
@@ -238,6 +238,18 @@ def validate_broker_runtime() -> None:
     if Path("/var/run/docker.sock").exists():
         raise RuntimeError("Daemonless broker must not expose Docker socket")
     _configured_peer_uid()
+    if backend == "parser_socket":
+        parser_path = os.environ.get("TRAMITIA_PARSER_SOCKET", "")
+        broker_path = os.environ.get("TRAMITIA_BROKER_SOCKET", _SOCKET_DEFAULT)
+        raw_uid = os.environ.get("TRAMITIA_PARSER_ALLOWED_PEER_UID", "")
+        if not parser_path or not Path(parser_path).is_absolute():
+            raise RuntimeError("Isolated parser socket must be an absolute path")
+        if parser_path == broker_path:
+            raise RuntimeError("Parser and broker must use different socket paths")
+        if (not raw_uid.isascii() or not raw_uid.isdecimal()
+                or int(raw_uid) in (0, os.geteuid())
+                or int(raw_uid) >= (1 << 32)):
+            raise RuntimeError("Isolated parser requires a distinct peer UID")
 
 
 def _harden_daemonless_broker_process() -> None:

@@ -316,6 +316,37 @@ class DaemonlessBrokerRuntimeTests(unittest.TestCase):
                 main()
             create.assert_not_called()
 
+    def test_daemonless_broker_validates_separate_parser_socket_identity(self):
+        original = {
+            "TRAMITIA_PDF_BROKER_DAEMONLESS": "1",
+            "TRAMITIA_PDF_WORKER_BACKEND": "parser_socket",
+            "TRAMITIA_BROKER_ALLOWED_PEER_UID": "12345",
+            "TRAMITIA_BROKER_SOCKET": "/run/tramitia/pdf-broker.sock",
+            "TRAMITIA_PARSER_SOCKET": "/run/tramitia-parser/parser.sock",
+            "TRAMITIA_PARSER_ALLOWED_PEER_UID": "65533",
+        }
+        with patch.dict(os.environ, original, clear=True), patch(
+            "app.pdf_broker.os.geteuid", return_value=65534
+        ), patch("app.pdf_broker.Path.exists", return_value=False):
+            validate_broker_runtime()
+
+        variants = [
+            {"TRAMITIA_PARSER_SOCKET": ""},
+            {"TRAMITIA_PARSER_SOCKET": "relative.sock"},
+            {"TRAMITIA_PARSER_SOCKET": "/run/tramitia/pdf-broker.sock"},
+            {"TRAMITIA_PARSER_ALLOWED_PEER_UID": "65534"},
+            {"TRAMITIA_PARSER_ALLOWED_PEER_UID": "0"},
+            {"TRAMITIA_PARSER_ALLOWED_PEER_UID": ""},
+        ]
+        for change in variants:
+            with self.subTest(change=change), patch.dict(
+                os.environ, {**original, **change}, clear=True
+            ), patch("app.pdf_broker.os.geteuid", return_value=65534), patch(
+                "app.pdf_broker.Path.exists", return_value=False
+            ):
+                with self.assertRaises(RuntimeError):
+                    validate_broker_runtime()
+
     def test_invalid_daemonless_selector_fails_closed(self):
         with patch.dict(os.environ, {
             "TRAMITIA_PDF_BROKER_DAEMONLESS": "yes",

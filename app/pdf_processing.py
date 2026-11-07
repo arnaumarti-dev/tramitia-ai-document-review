@@ -106,31 +106,67 @@ def _read_broker_exact(connection: socket.socket, length: int) -> bytes:
     return bytes(data)
 
 
-def _broker_request(data: bytes, max_pages: int, max_chars: int) -> bytes:
-    """Send only validated PDF bytes/limits to a trusted local Unix socket.
+def _request_fixed_socket(
+    data: bytes, max_pages: int, max_chars: int, *, target: str,
+    expected_peer_uid: int | None = None,
+) -> bytes:
+    """Fixed binary protocol, optionally binding trust to the kernel peer UID.
 
-    No Docker CLI, Docker socket or arbitrary launch command is used here.
+    The broker-to-parser link MUST authenticate the other service before
+    transmitting an untrusted PDF. Only Linux SO_PEERCRED may establish UID.
     """
-    if not hasattr(socket, "AF_UNIX"):
-        raise PdfProcessingError(503, "El broker PDF no es compatible con este sistema.")
-    target = os.getenv("TRAMITIA_BROKER_SOCKET", "/run/tramitia/pdf-broker.sock")
-    if not Path(target).is_absolute():
-        raise PdfProcessingError(503, "Ruta del broker PDF no válida.")
+    if not hasattr(socket, "AF_UNIX") or not Path(target).is_absolute():
+        raise PdfProcessingError(503, "Ruta o servicio PDF aislado no válido.")
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(MAX_WORKER_SECONDS + 5)
             connection.connect(target)
+            if expected_peer_uid is not None:
+                if sys.platform != "linux" or not hasattr(socket, "SO_PEERCRED"):
+                    raise PdfProcessingError(
+                        503, "No se puede verificar la identidad del parser."
+                    )
+                credentials = connection.getsockopt(
+                    socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
+                )
+                _pid, uid, _gid = struct.unpack("3i", credentials)
+                if uid != expected_peer_uid:
+                    raise PdfProcessingError(
+                        503, "El servicio de análisis no tiene la identidad esperada."
+                    )
             connection.sendall(struct.pack("!III", len(data), max_pages, max_chars) + data)
             size = struct.unpack("!I", _read_broker_exact(connection, 4))[0]
             if size > MAX_WORKER_STDOUT_BYTES or size == 0:
-                raise ValueError("Oversized broker output")
+                raise ValueError("Oversized socket output")
             return _read_broker_exact(connection, size)
     except (OSError, ConnectionError, TimeoutError) as exc:
         raise PdfProcessingError(
             503, "No se pudo contactar con el servicio aislado de PDF."
         ) from exc
     except (ValueError, struct.error) as exc:
-        raise PdfProcessingError(422, "Respuesta del broker PDF no válida.") from exc
+        raise PdfProcessingError(422, "Respuesta del servicio PDF no válida.") from exc
+
+
+def _broker_request(data: bytes, max_pages: int, max_chars: int) -> bytes:
+    """Web -> broker. No Docker CLI, host daemon or arbitrary commands."""
+    target = os.getenv("TRAMITIA_BROKER_SOCKET", "/run/tramitia/pdf-broker.sock")
+    return _request_fixed_socket(
+        data, max_pages, max_chars, target=target
+    )
+
+
+def _parser_socket_request(data: bytes, max_pages: int, max_chars: int) -> bytes:
+    """Broker -> separately containerized parser: verify Linux peer UID."""
+    target = os.getenv("TRAMITIA_PARSER_SOCKET", "")
+    raw = os.getenv("TRAMITIA_PARSER_ALLOWED_PEER_UID", "")
+    if not raw.isascii() or not raw.isdecimal() or not target:
+        raise PdfProcessingError(503, "Identidad o socket del parser sin configurar.")
+    uid = int(raw)
+    if uid <= 0 or uid >= (1 << 32) or uid == os.geteuid():
+        raise PdfProcessingError(503, "Identidad del parser no válida.")
+    return _request_fixed_socket(
+        data, max_pages, max_chars, target=target, expected_peer_uid=uid
+    )
 
 
 def _run_bounded_worker(
@@ -254,8 +290,11 @@ def _parse_pdf_document_unlocked(
     if not (1 <= max_pages <= 50 and 1 <= max_chars <= 200_000):
         raise ValueError("Invalid worker resource limits")
 
-    if os.getenv("TRAMITIA_PDF_WORKER_BACKEND", "subprocess") == "broker":
+    backend = os.getenv("TRAMITIA_PDF_WORKER_BACKEND", "subprocess")
+    if backend == "broker":
         response = _broker_request(data, max_pages, max_chars)
+    elif backend == "parser_socket":
+        response = _parser_socket_request(data, max_pages, max_chars)
     else:
         command, environment = _worker_launch(max_pages, max_chars)
         completed = _run_bounded_worker(command, data, environment)
