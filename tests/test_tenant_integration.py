@@ -194,6 +194,29 @@ class TenantIsolationIntegrationTests(unittest.TestCase):
         with self.conn.cursor() as cursor:
             cursor.execute("SELECT id FROM analyses WHERE id = %s", (report_id,))
             self.assertIsNone(cursor.fetchone())
+            cursor.execute(
+                """SELECT organization_id, actor_user_id, analysis_id, action
+                   FROM analysis_deletion_audit WHERE analysis_id = %s;""",
+                (report_id,),
+            )
+            events = cursor.fetchall()
+        self.assertEqual(events, [(
+            self.organizations[0], self.users[0][0], report_id, "analysis.deleted"
+        )])
+        owner_a_audit = self.client.get("/audit/deletions", headers=owner_a)
+        owner_b_audit = self.client.get("/audit/deletions", headers=owner_b)
+        self.assertEqual(owner_a_audit.status_code, 200, owner_a_audit.text)
+        self.assertEqual(owner_b_audit.status_code, 200, owner_b_audit.text)
+        own = [event for event in owner_a_audit.json()["items"]
+               if event["analysis_id"] == report_id]
+        self.assertEqual(len(own), 1)
+        self.assertEqual(own[0]["actor_user_id"], self.users[0][0])
+        self.assertFalse({"filename", "extracted_text", "text_sha256"} & own[0].keys())
+        self.assertFalse(any(event["analysis_id"] == report_id
+                             for event in owner_b_audit.json()["items"]))
+        self.assertEqual(
+            self.client.get("/audit/deletions", headers=employee).status_code, 403
+        )
 
     def test_login_rate_limit_blocks_after_five_failures(self):
         """Throttling is shared via PostgreSQL, not individual app workers."""

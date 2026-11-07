@@ -54,12 +54,8 @@ def save_analysis(report: dict, organization_id: int) -> int:
         conn.close()
 
 
-def delete_analysis(analysis_id: int, organization_id: int) -> bool:
-    """Delete exactly one report owned by this organization.
-
-    An ID belonging to another organization is indistinguishable from an
-    unknown ID. Never accept a tenant ID from the client.
-    """
+def delete_analysis(analysis_id: int, organization_id: int, actor_user_id: int) -> bool:
+    """Atomically remove this tenant's report and record a minimal audit event."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -68,11 +64,39 @@ def delete_analysis(analysis_id: int, organization_id: int) -> bool:
                 (analysis_id, organization_id),
             )
             deleted = cur.fetchone() is not None
+            if deleted:
+                # An audit failure must roll back the deletion too. No sensitive
+                # filename, extracted content, IP address or document hash.
+                cur.execute(
+                    """INSERT INTO analysis_deletion_audit
+                       (organization_id, actor_user_id, analysis_id)
+                       VALUES (%s, %s, %s);""",
+                    (organization_id, actor_user_id, analysis_id),
+                )
         conn.commit()
         return deleted
     except Exception:
         conn.rollback()
         raise
+    finally:
+        conn.close()
+
+
+def list_deletion_events(organization_id: int, limit: int = 50,
+                         offset: int = 0) -> dict:
+    """Read only the current organization's minimal deletion ledger."""
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """SELECT id, analysis_id, actor_user_id, action, occurred_at
+                   FROM analysis_deletion_audit
+                   WHERE organization_id = %s
+                   ORDER BY occurred_at DESC, id DESC
+                   LIMIT %s OFFSET %s;""",
+                (organization_id, limit, offset),
+            )
+            return {"items": cur.fetchall(), "limit": limit, "offset": offset}
     finally:
         conn.close()
 

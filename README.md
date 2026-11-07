@@ -13,7 +13,7 @@ TramitIA is a **local MVP** for reviewing administrative PDF documents, focused 
 - Store organization-scoped metadata and findings in PostgreSQL (raw extracted text is not stored for new analyses).
 - List and filter past analyses (filename, minimum score, status, document type).
 - View and download only the analyses belonging to the authenticated organization.
-- Owners/admins can permanently delete an organization's analysis metadata through the authenticated API (with cross-tenant 404 behavior). This does **not** erase exported copies or backups.
+- Owners/admins can delete their organization's analysis metadata; each successful deletion is recorded atomically with the actor ID. Authorized managers can read minimal events via `GET /audit/deletions`. This does **not** erase exported copies or backups.
 
 ## Tech Stack
 
@@ -217,6 +217,9 @@ Base URL: `http://127.0.0.1:8000`
   - Owner/admin only; delete a single report in the authenticated organization.
   - Returns HTTP 204 for success, 401 for anonymous, 403 for employees and 404 for unknown/cross-organization IDs.
   - Exports and backups are not deleted by this operation; review retention obligations before production.
+- `GET /audit/deletions`
+  - Owner/admin only; paginated and tenant-scoped deletion events, no document contents, filename or IP.
+  - Audit retention is not automated. See [draft data and retention policy](docs/DATOS_Y_RETENCION_ES.md).
 
 ## Example Response (`POST /analyze`)
 

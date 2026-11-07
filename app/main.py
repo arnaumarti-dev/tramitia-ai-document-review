@@ -34,6 +34,7 @@ from app.repository import (
     get_analysis_by_id,
     get_analysis_export,
     delete_analysis,
+    list_deletion_events,
 )
 
 @asynccontextmanager
@@ -314,9 +315,18 @@ def remove_analysis(
 ):
     # Only a current owner/admin may delete a report, scoped to their own
     # organization. Unknown and cross-tenant IDs return the same 404.
-    if not delete_analysis(analysis_id, principal.organization_id):
+    if not delete_analysis(analysis_id, principal.organization_id, principal.user_id):
         raise HTTPException(status_code=404, detail="Analysis not found")
     return Response(status_code=204)
+
+
+@app.get("/audit/deletions")
+def deletion_audit(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    principal: Principal = Depends(require_staff_manager),
+):
+    return list_deletion_events(principal.organization_id, limit=limit, offset=offset)
 
 
 @app.get("/analyses/{analysis_id}/export")

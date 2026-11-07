@@ -44,7 +44,9 @@ No ofrecerlo hasta que se hayan completado, documentado y verificado:
 - [ ] Despliegue real revisado: HTTPS, proxy confiable, copias de seguridad,
       recuperación, monitorización, permisos y gestión de secretos.
 - [ ] Política de conservación y eliminación (base de datos, copias,
-      exportaciones); auditoría de accesos y borrados.
+      exportaciones); auditoría de accesos y borrados. Existe un registro
+      inicial de borrados, no una auditoría completa de accesos. Consulta
+      [DATOS_Y_RETENCION_ES.md](DATOS_Y_RETENCION_ES.md).
 - [ ] Revisión RGPD, base jurídica, roles de responsable/encargado,
       contrato adecuado y evaluación de impacto si corresponde.
 - [ ] Ensayos con casos representativos autorizados, tasa de falsos positivos,
