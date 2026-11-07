@@ -100,10 +100,13 @@ the container cannot access an external network or the Docker socket.
 - The broker and its PDF-parsing subprocess have the same container UID
   and share the broker socket mount. A parser compromise could disrupt
   the broker and attempt socket misuse; this is **not equivalent to a
-  separate microVM per uploaded PDF**. Peer-UID checks reject parser-origin
-  broker requests, but the parser still has the broker owner's UID and can
-  potentially unlink/replace the shared socket path. This requires separate
-  parser credentials or mount isolation before production. The container's
+  separate microVM per uploaded PDF**. The daemonless broker now requires
+  Linux PR_SET_DUMPABLE=0 and verifies it before binding its socket, reducing
+  same-UID `ptrace` and `/proc/pid/mem` exposure to a compromised parser.
+  Peer-UID checks reject parser-origin broker requests. These defenses do
+  **not** prevent a parser from acting as the broker's filesystem UID and
+  potentially unlinking/replacing the shared socket path. Separate parser
+  credentials or mount isolation remain necessary before production. The container's
   limits and lack of secrets/network reduce impact, but do not eliminate
   host kernel or denial-of-service risks.
 - A trusted operator/rootful Docker daemon still controls the host at

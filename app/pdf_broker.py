@@ -240,8 +240,39 @@ def validate_broker_runtime() -> None:
     _configured_peer_uid()
 
 
+def _harden_daemonless_broker_process() -> None:
+    """Prevent same-UID parser children from inspecting broker memory.
+
+    Linux PR_SET_DUMPABLE=0 blocks ordinary same-UID ptrace and /proc/pid/mem
+    access, reducing the impact of a compromised parser. This is NOT a UID
+    boundary and cannot stop the parser from replacing a writable socket path.
+    Fail closed if the kernel cannot enforce or verify the setting.
+    """
+    if sys.platform != "linux":
+        raise RuntimeError("Broker memory protection requires Linux")
+    import ctypes
+
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        prctl = libc.prctl
+        prctl.argtypes = (
+            ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
+            ctypes.c_ulong, ctypes.c_ulong,
+        )
+        prctl.restype = ctypes.c_int
+        # PR_SET_DUMPABLE=4, PR_GET_DUMPABLE=3.
+        if prctl(4, 0, 0, 0, 0) != 0:
+            raise RuntimeError("Cannot disable broker process dumpability")
+        if prctl(3, 0, 0, 0, 0) != 0:
+            raise RuntimeError("Cannot verify broker process dumpability")
+    except (AttributeError, OSError) as exc:
+        raise RuntimeError("Broker memory protection is unavailable") from exc
+
+
 def main() -> None:
     validate_broker_runtime()
+    if os.environ.get("TRAMITIA_PDF_BROKER_DAEMONLESS", "0") == "1":
+        _harden_daemonless_broker_process()
     socket_path = os.environ.get("TRAMITIA_BROKER_SOCKET", _SOCKET_DEFAULT)
     server = create_server(socket_path)
     try:

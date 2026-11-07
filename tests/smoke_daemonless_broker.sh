@@ -87,6 +87,14 @@ assert not os.path.exists("/var/run/docker.sock")
 assert "TRAMITIA_JWT_SECRET" not in os.environ
 assert "POSTGRES_PASSWORD" not in os.environ
 assert os.environ["TRAMITIA_BROKER_ALLOWED_PEER_UID"] != str(os.geteuid())
+# Broker PID 1 must not expose process memory to another same-UID process.
+try:
+    with open("/proc/1/mem", "rb") as memory:
+        memory.read(1)
+except PermissionError:
+    pass
+else:
+    raise AssertionError("Broker PID 1 is readable by same-UID processes")
 # The Linux parser UID must not be admitted by the broker socket.
 peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 peer.settimeout(3)

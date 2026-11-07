@@ -269,6 +269,53 @@ class DaemonlessBrokerRuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "must differ"):
                 validate_broker_runtime()
 
+    @unittest.skipUnless(os.name == "posix", "Linux-specific process protection")
+    def test_daemonless_hardening_sets_and_verifies_nondumpable_state(self):
+        with patch("ctypes.CDLL") as libc:
+            prctl = libc.return_value.prctl
+            prctl.side_effect = [0, 0]
+            from app.pdf_broker import _harden_daemonless_broker_process
+            _harden_daemonless_broker_process()
+        self.assertEqual(prctl.call_count, 2)
+        self.assertEqual(prctl.call_args_list[0].args, (4, 0, 0, 0, 0))
+        self.assertEqual(prctl.call_args_list[1].args, (3, 0, 0, 0, 0))
+
+    @unittest.skipUnless(os.name == "posix", "Linux-specific process protection")
+    def test_daemonless_hardening_refuses_missing_kernel_protection(self):
+        from app.pdf_broker import _harden_daemonless_broker_process
+        for results in ([-1], [0, 1]):
+            with self.subTest(results=results), patch("ctypes.CDLL") as libc:
+                libc.return_value.prctl.side_effect = results
+                with self.assertRaisesRegex(RuntimeError, "dumpability"):
+                    _harden_daemonless_broker_process()
+        with patch("ctypes.CDLL", side_effect=OSError("blocked")):
+            with self.assertRaisesRegex(RuntimeError, "unavailable"):
+                _harden_daemonless_broker_process()
+
+    def test_main_hardens_before_binding_daemonless_socket(self):
+        from app.pdf_broker import main
+        with patch.dict(os.environ, {
+            "TRAMITIA_PDF_BROKER_DAEMONLESS": "1",
+            "TRAMITIA_BROKER_SOCKET": "/tmp/test-broker-not-created.sock",
+        }), patch("app.pdf_broker.validate_broker_runtime"), patch(
+            "app.pdf_broker._harden_daemonless_broker_process"
+        ) as protect, patch(
+            "app.pdf_broker.create_server"
+        ) as create, patch("app.pdf_broker.Path.unlink"):
+            main()
+            protect.assert_called_once_with()
+            create.assert_called_once()
+            # A failed hardening step must abort before opening the socket.
+        with patch.dict(os.environ, {
+            "TRAMITIA_PDF_BROKER_DAEMONLESS": "1"
+        }), patch("app.pdf_broker.validate_broker_runtime"), patch(
+            "app.pdf_broker._harden_daemonless_broker_process",
+            side_effect=RuntimeError("not protected")
+        ), patch("app.pdf_broker.create_server") as create:
+            with self.assertRaisesRegex(RuntimeError, "not protected"):
+                main()
+            create.assert_not_called()
+
     def test_invalid_daemonless_selector_fails_closed(self):
         with patch.dict(os.environ, {
             "TRAMITIA_PDF_BROKER_DAEMONLESS": "yes",
