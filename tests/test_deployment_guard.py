@@ -135,7 +135,7 @@ class IsolatedWebStartupTests(unittest.TestCase):
                 def __init__(self, info, uid):
                     self.st_mode = info.st_mode
                     self.st_uid = uid
-            get_stat.side_effect = lambda target: (
+            get_stat.side_effect = lambda target, **kwargs: (
                 Stub(real_directory, os.getuid() + 10000)
                 if str(target) == self.folder.name
                 else Stub(real_socket, os.getuid())
