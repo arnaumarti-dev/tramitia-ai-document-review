@@ -54,6 +54,29 @@ def save_analysis(report: dict, organization_id: int) -> int:
         conn.close()
 
 
+def delete_analysis(analysis_id: int, organization_id: int) -> bool:
+    """Delete exactly one report owned by this organization.
+
+    An ID belonging to another organization is indistinguishable from an
+    unknown ID. Never accept a tenant ID from the client.
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM analyses WHERE id = %s AND organization_id = %s RETURNING id;",
+                (analysis_id, organization_id),
+            )
+            deleted = cur.fetchone() is not None
+        conn.commit()
+        return deleted
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _build_filters(
     organization_id: int,
     filename: Optional[str],

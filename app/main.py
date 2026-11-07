@@ -8,7 +8,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, Response
 from pydantic import BaseModel, Field
 
 from app.auth import Principal, authenticate, current_principal, issue_token, TOKEN_MINUTES
@@ -33,6 +33,7 @@ from app.repository import (
     list_analyses,
     get_analysis_by_id,
     get_analysis_export,
+    delete_analysis,
 )
 
 @asynccontextmanager
@@ -305,6 +306,17 @@ def get_analysis(analysis_id: int, principal: Principal = Depends(current_princi
     if not row:
         raise HTTPException(status_code=404, detail="Analysis not found")
     return row
+
+
+@app.delete("/analyses/{analysis_id}", status_code=204)
+def remove_analysis(
+    analysis_id: int, principal: Principal = Depends(require_staff_manager)
+):
+    # Only a current owner/admin may delete a report, scoped to their own
+    # organization. Unknown and cross-tenant IDs return the same 404.
+    if not delete_analysis(analysis_id, principal.organization_id):
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    return Response(status_code=204)
 
 
 @app.get("/analyses/{analysis_id}/export")

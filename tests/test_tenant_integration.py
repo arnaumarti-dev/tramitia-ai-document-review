@@ -10,6 +10,7 @@ from pypdf import PdfWriter
 from app.auth import Principal, hash_password, issue_token
 from app.db import get_conn
 from app.main import app
+from app.repository import save_analysis
 from scripts.manage_staff import add_staff, disable_staff, list_staff
 
 
@@ -143,6 +144,56 @@ class TenantIsolationIntegrationTests(unittest.TestCase):
                 )
             self.conn.commit()
 
+
+    def test_owner_can_delete_only_own_reports_employee_cannot(self):
+        owner_a, owner_b = self.headers
+        report = {
+            "filename": "solo-prueba-ficticia.pdf",
+            "pages": 1,
+            "chars": 70,
+            "document_type": "subsidy_application",
+            "score": 65,
+            "status": "REVISAR",
+            "summary": "Informe de prueba sin datos de clientes.",
+            "findings": [],
+            "text_sha256": "0" * 64,
+        }
+        report_id = save_analysis(report, self.organizations[0])
+        staff_email = f"deletion-{uuid.uuid4().hex[:12]}@example.invalid"
+        _staff_id, employee = self.invite_and_accept(
+            owner_a, staff_email, "employee"
+        )
+
+        # Anonymous, employees and other tenants must never delete the report.
+        self.assertEqual(self.client.delete(f"/analyses/{report_id}").status_code, 401)
+        self.assertEqual(self.client.delete(
+            f"/analyses/{report_id}", headers=employee
+        ).status_code, 403)
+        self.assertEqual(self.client.delete(
+            f"/analyses/{report_id}", headers=owner_b
+        ).status_code, 404)
+        self.assertEqual(self.client.get(
+            f"/analyses/{report_id}", headers=owner_a
+        ).status_code, 200)
+
+        deleted = self.client.delete(f"/analyses/{report_id}", headers=owner_a)
+        self.assertEqual(deleted.status_code, 204, deleted.text)
+        self.assertFalse(deleted.content)
+        self.assertEqual(self.client.delete(
+            f"/analyses/{report_id}", headers=owner_a
+        ).status_code, 404)
+        for suffix in ("", "/export"):
+            self.assertEqual(self.client.get(
+                f"/analyses/{report_id}{suffix}", headers=owner_a
+            ).status_code, 404)
+        self.assertNotIn(report_id, [
+            item["id"] for item in self.client.get(
+                "/analyses", headers=owner_a
+            ).json()["items"]
+        ])
+        with self.conn.cursor() as cursor:
+            cursor.execute("SELECT id FROM analyses WHERE id = %s", (report_id,))
+            self.assertIsNone(cursor.fetchone())
 
     def test_login_rate_limit_blocks_after_five_failures(self):
         """Throttling is shared via PostgreSQL, not individual app workers."""
