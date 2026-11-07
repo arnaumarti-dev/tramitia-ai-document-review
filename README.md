@@ -9,7 +9,10 @@ TramitIA is a **local MVP** for reviewing administrative PDF documents, focused 
 - Sign in to a specific organization and upload PDFs (up to 20 MiB, 50 pages, and 200,000 extracted text characters) from a web dashboard.
 - Extract text from PDFs with `pypdf`.
 - Run rule-based validations for subsidy application documents.
-- Generate a risk score (`0-100`) and status (`OK`, `REVISAR`, `RIESGO`).
+- Generate an **indicative rule-match score (0-100)**, not a prediction of
+  eligibility, acceptance, or legal validity. For new subsidy reports, textual
+  checks never return `OK`: the result remains `REVISAR` or `RIESGO`
+  and always requires human review. Historical reports can still have `OK`.
 - Store organization-scoped metadata and findings in PostgreSQL (raw extracted text is not stored for new analyses).
 - List and filter past analyses (filename, minimum score, status, document type).
 - View and download only the analyses belonging to the authenticated organization.

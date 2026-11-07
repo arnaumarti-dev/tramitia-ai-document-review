@@ -1,6 +1,52 @@
 import re
+from datetime import date
 from typing import List, Tuple
 from app.schemas.report import Finding
+
+
+# These are *textual indicators*, not proof of identity, authorship or
+# acceptance of an administrative application.
+_ID_CANDIDATES = re.compile(r"\b(?:\d{8}|[XYZ]\d{7})[A-Z]\b", re.IGNORECASE)
+_ID_LETTERS = "TRWAGMYFPDXBNJZSQVHLCKE"
+_DATE_DMY = re.compile(r"(?<!\d)(\d{1,2})([./-])(\d{1,2})\2(\d{4})(?!\d)")
+_DATE_YMD = re.compile(r"(?<!\d)(\d{4})([./-])(\d{1,2})\2(\d{1,2})(?!\d)")
+_SIGNATURE_WORDS = re.compile(r"\b(?:firma|firmad[oa])\b", re.IGNORECASE)
+_EXPLICITLY_UNSIGNED = re.compile(
+    r"\b(?:sin\s+firma|falta\s+(?:la\s+)?firma|firma\s+(?:pendiente|ausente)"
+    r"|pendiente\s+de\s+firma|no\s+(?:est[aá]\s+)?firmad[oa])\b",
+    re.IGNORECASE,
+)
+
+
+def _valid_nif_nie_control_letter(candidate: str) -> bool:
+    """Check Spain's DNI/NIE letter; never claim holder identity is verified."""
+    value = candidate.upper()
+    numeric = (str("XYZ".index(value[0])) + value[1:8]
+               if value[0] in "XYZ" else value[:8])
+    return _ID_LETTERS[int(numeric) % 23] == value[-1]
+
+
+def _date_signals(text: str) -> tuple[bool, bool]:
+    """Return (calendar-valid date found, impossible date found).
+
+    Only unambiguous four-digit years are accepted. This checks calendar
+    possibility, not that a document was actually signed/submitted that day.
+    """
+    has_valid = False
+    has_impossible = False
+    for regex, iso_first in ((_DATE_DMY, False), (_DATE_YMD, True)):
+        for match in regex.finditer(text):
+            if iso_first:
+                year, month, day = map(int, (match[1], match[3], match[4]))
+            else:
+                day, month, year = map(int, (match[1], match[3], match[4]))
+            try:
+                date(year, month, day)
+                has_valid = True
+            except ValueError:
+                has_impossible = True
+    return has_valid, has_impossible
+
 
 
 def validate_basic(text: str) -> List[Finding]:
@@ -16,12 +62,20 @@ def validate_basic(text: str) -> List[Finding]:
         ))
         return findings
 
-    if not re.search(r"\b(\d{8}[A-Z]|[XYZ]\d{7}[A-Z])\b", normalized):
+    candidates = _ID_CANDIDATES.findall(normalized)
+    if not candidates:
         findings.append(Finding(
             code="MISSING_ID",
             severity="warning",
-            message="No se detecta un DNI o NIE en el documento.",
-            hint="Revisa que el documento incluya identificación."
+            message="No se detecta un posible DNI o NIE en el texto.",
+            hint="Comprueba la identificación manualmente si el trámite la exige."
+        ))
+    elif any(not _valid_nif_nie_control_letter(item) for item in candidates):
+        findings.append(Finding(
+            code="INVALID_ID_CONTROL",
+            severity="warning",
+            message="Algún posible DNI/NIE presenta una letra de control incorrecta.",
+            hint="Revisa el dato con el documento original. Una letra correcta no acredita identidad."
         ))
 
     if not re.search(r"\b[\w\.-]+@[\w\.-]+\.\w{2,}\b", normalized):
@@ -41,20 +95,20 @@ def validate_basic(text: str) -> List[Finding]:
             hint="Si no es obligatorio, puedes ignorar este aviso."
         ))
 
-    if not re.search(r"\bfirma\b|\bfirmado\b|\bfirmada\b", normalized, re.IGNORECASE):
+    if not _SIGNATURE_WORDS.search(normalized):
         findings.append(Finding(
             code="MISSING_SIGNATURE",
             severity="info",
-            message="No se detectan indicios de firma.",
-            hint="Si es una solicitud o contrato, revisa si falta firmar."
+            message="No se menciona una firma en el texto extraído.",
+            hint="Una firma visible o electrónica no puede verificarse con una búsqueda de palabras."
         ))
 
     return findings
 
 
 def _has_date(normalized: str) -> bool:
-    # Fechas típicas: 28/01/2026, 28-01-2026, 28.01.2026, 2026-01-28
-    return bool(re.search(r"\b(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}|\d{4}[\/\-.]\d{1,2}[\/\-.]\d{1,2})\b", normalized))
+    """Calendar-valid, four-digit-year date indication (not date authenticity)."""
+    return _date_signals(normalized)[0]
 
 
 def validate_subsidy_application(text: str) -> Tuple[List[Finding], int, str, str]:
@@ -67,13 +121,21 @@ def validate_subsidy_application(text: str) -> Tuple[List[Finding], int, str, st
 
     # ---- Checks específicos de ayudas/subvenciones ----
 
-    # A) Fecha
-    if not _has_date(normalized):
+    # A) Fecha: detecting a pattern is not validating a real calendar date.
+    has_valid_date, has_impossible_date = _date_signals(normalized)
+    if has_impossible_date:
+        findings.append(Finding(
+            code="INVALID_DATE",
+            severity="warning",
+            message="Se detecta al menos una fecha de calendario imposible.",
+            hint="Comprueba las fechas con el documento original (por ejemplo, 31/02/2026 no existe)."
+        ))
+    if not has_valid_date and not has_impossible_date:
         findings.append(Finding(
             code="MISSING_DATE",
             severity="warning",
-            message="No se detecta una fecha en la solicitud.",
-            hint="Incluye la fecha (dd/mm/aaaa) si el documento es una solicitud."
+            message="No se identifica una fecha completa con año de cuatro cifras.",
+            hint="Comprueba manualmente la fecha exigida; una coincidencia no verifica autenticidad."
         ))
 
     # B) Dirección (muy heurístico)
@@ -103,16 +165,21 @@ def validate_subsidy_application(text: str) -> Tuple[List[Finding], int, str, st
             hint="Muchas ayudas exigen una declaración responsable en el texto."
         ))
 
-    # E) Firma: aquí la tratamos como más seria para solicitud
-    # Si en basic era info, la reforzamos (pero sin duplicar)
-    has_signature = re.search(r"\bfirma\b|\bfirmado\b|\bfirmada\b", normalized, re.IGNORECASE)
-    if not has_signature:
-        # ya añade basic MISSING_SIGNATURE (info). Aquí añadimos “crítico” para ayudas.
+    # E) Firma: a word such as "firmado" is NOT a signature verification.
+    has_signature_word = bool(_SIGNATURE_WORDS.search(normalized))
+    if not has_signature_word or _EXPLICITLY_UNSIGNED.search(normalized):
         findings.append(Finding(
             code="SIGNATURE_REQUIRED",
             severity="warning",
-            message="En solicitudes suele ser obligatoria la firma. No se detecta.",
-            hint="Revisa que el documento esté firmado o tenga sección de firma."
+            message="No hay evidencia textual suficiente de una firma; puede indicarse que falta.",
+            hint="Verifica la firma en el PDF original mediante una herramienta de firma digital, si procede."
+        ))
+    else:
+        findings.append(Finding(
+            code="SIGNATURE_UNVERIFIED",
+            severity="info",
+            message="El texto menciona una firma, pero no se ha verificado su existencia ni validez.",
+            hint="Solo se han analizado palabras; una firma electrónica requiere validación específica."
         ))
 
     # ---- Score & status ----
@@ -129,12 +196,18 @@ def validate_subsidy_application(text: str) -> Tuple[List[Finding], int, str, st
 
     if errors >= 1 or warnings >= 3 or score < 55:
         status = "RIESGO"
-        summary = "La solicitud tiene carencias importantes y podría ser rechazada por errores o faltas de datos."
-    elif warnings >= 1 or infos >= 3 or score < 75:
-        status = "REVISAR"
-        summary = "La solicitud parece válida, pero conviene revisar algunos puntos para reducir riesgos."
+        summary = (
+            "Se han detectado varias alertas textuales que requieren revisión prioritaria. "
+            "No se ha comprobado la validez legal ni la existencia de una firma."
+        )
     else:
-        status = "OK"
-        summary = "La solicitud parece correcta según las validaciones básicas."
+        # A text-only rule engine can never certify a document as correct.
+        # Preserve the old schema/status choices, but do not emit a false OK.
+        status = "REVISAR"
+        summary = (
+            "Resultado orientativo de reglas textuales. No verifica identidad, "
+            "firma electrónica, requisitos de la convocatoria ni validez legal. "
+            "Se necesita revisión humana."
+        )
 
     return findings, score, status, summary
