@@ -36,7 +36,7 @@ if sudo -u "$account" test -w "$broker_dir"; then
 fi
 
 # Untrusted parser service: different UID and *no broker socket mount*.
-docker run --detach --rm --name "$parser" \
+docker run --detach --restart unless-stopped --name "$parser" \
   --network=none --read-only --cap-drop=ALL \
   --security-opt=no-new-privileges \
   --pids-limit=32 --memory=1g --memory-swap=1g --cpus=1 \
@@ -45,6 +45,7 @@ docker run --detach --rm --name "$parser" \
   --mount "type=bind,src=$parser_dir,dst=/run/tramitia-parser" \
   --env TRAMITIA_PDF_BROKER_DAEMONLESS=1 \
   --env TRAMITIA_PDF_WORKER_BACKEND=subprocess \
+  --env TRAMITIA_PARSER_ONE_SHOT=1 \
   --env TRAMITIA_BROKER_SOCKET=/run/tramitia-parser/parser.sock \
   --env TRAMITIA_BROKER_SOCKET_GID=65534 \
   --env TRAMITIA_BROKER_ALLOWED_PEER_UID=65534 \
@@ -150,7 +151,35 @@ print("Fictional PDF passed web -> broker -> distinct parser container")
 '
 )
 
-# Fail closed if the isolated parser disappears: no fallback subprocess/Docker.
+# A successful PDF request must restart the isolated parser container.
+for attempt in $(seq 1 45); do
+  restarts=$(docker inspect -f '{{.RestartCount}}' "$parser")
+  if [ "$restarts" -ge 1 ] && sudo test -S "$parser_dir/parser.sock"; then
+    break
+  fi
+  sleep 1
+done
+test "$(docker inspect -f '{{.RestartCount}}' "$parser")" -ge 1
+wait_for_socket "$parser_dir/parser.sock" "$parser"
+
+# Process a second invented PDF using the restarted parser service.
+(
+  cd "$stage_dir"
+  sudo -n setpriv --reuid="$(id -u "$account")" \
+    --regid="$(id -g "$account")" --init-groups \
+    env -i PATH="$PATH" PYTHONDONTWRITEBYTECODE=1 \
+    TRAMITIA_PDF_WORKER_BACKEND=broker \
+    TRAMITIA_BROKER_SOCKET="$broker_dir/pdf-broker.sock" \
+    "$(command -v python)" -c '
+from app.pdf_processing import parse_pdf_document
+from scripts.generate_demo_pdf import make_demo_pdf
+content, pages = parse_pdf_document(make_demo_pdf())
+assert pages == 1 and "Solicitud ficticia" in content
+print("Second fictional PDF processed after parser restart")
+'
+)
+
+# Fail closed if parser service is removed by operator.
 docker rm -f "$parser" >/dev/null
 (
   cd "$stage_dir"

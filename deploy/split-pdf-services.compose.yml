@@ -14,6 +14,8 @@ services:
     environment:
       TRAMITIA_PDF_BROKER_DAEMONLESS: "1"
       TRAMITIA_PDF_WORKER_BACKEND: subprocess
+      # Restart parser service after each authenticated request.
+      TRAMITIA_PARSER_ONE_SHOT: "1"
       TRAMITIA_BROKER_SOCKET: /run/tramitia-parser/parser.sock
       TRAMITIA_BROKER_SOCKET_GID: "65534"
       TRAMITIA_BROKER_ALLOWED_PEER_UID: "65534"

@@ -101,6 +101,54 @@ class BrokerProtocolTests(unittest.TestCase):
                 thread.join(timeout=5)
                 Path(path).unlink(missing_ok=True)
 
+    @unittest.skipUnless(
+        hasattr(socket, "SO_PEERCRED") and os.name == "posix",
+        "Linux SO_PEERCRED required",
+    )
+    def test_one_shot_parser_accepts_one_request_then_stops(self):
+        with tempfile.TemporaryDirectory(prefix="tramitia-one-shot-") as folder:
+            path = str(Path(folder) / "parser.sock")
+            env = {
+                "TRAMITIA_PDF_BROKER_DAEMONLESS": "1",
+                "TRAMITIA_PDF_WORKER_BACKEND": "subprocess",
+                "TRAMITIA_BROKER_ALLOWED_PEER_UID": str(os.getuid() + 1),
+                "TRAMITIA_PARSER_ONE_SHOT": "1",
+            }
+            with patch.dict(os.environ, env), patch(
+                "app.pdf_broker._configured_peer_uid", return_value=None
+            ):
+                with self.assertRaisesRegex(RuntimeError, "daemonless parser"):
+                    create_server(path)
+                self.assertFalse(Path(path).exists())
+
+            with patch.dict(os.environ, env), patch(
+                "app.pdf_broker._configured_peer_uid", return_value=os.getuid()
+            ), patch("app.pdf_broker.parse_pdf_document", return_value=("simulado", 1)):
+                server = create_server(path)
+                thread = threading.Thread(
+                    target=server.serve_forever,
+                    kwargs={"poll_interval": 0.01}, daemon=True
+                )
+                thread.start()
+                try:
+                    sample = make_demo_pdf()
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                        sock.settimeout(3)
+                        sock.connect(path)
+                        sock.sendall(struct.pack("!III", len(sample), 50, 200000) + sample)
+                        header = sock.recv(4)
+                        size = struct.unpack("!I", header)[0]
+                        result = json.loads(sock.recv(size))
+                    self.assertEqual(result, {"pages": 1, "text": "simulado"})
+                    thread.join(timeout=3)
+                    self.assertFalse(thread.is_alive(), "One-shot parser did not stop")
+                    self.assertEqual(server._accepted_requests, 1)
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=3)
+                    Path(path).unlink(missing_ok=True)
+
     def test_good_pdf_protocol_returns_text_without_docker_in_api(self):
         sample = make_demo_pdf()
         with patch("app.pdf_broker.parse_pdf_document", return_value=("Texto ficticio", 1)) as parser, patch(
@@ -342,6 +390,30 @@ class DaemonlessBrokerRuntimeTests(unittest.TestCase):
             with self.subTest(change=change), patch.dict(
                 os.environ, {**original, **change}, clear=True
             ), patch("app.pdf_broker.os.geteuid", return_value=65534), patch(
+                "app.pdf_broker.Path.exists", return_value=False
+            ):
+                with self.assertRaises(RuntimeError):
+                    validate_broker_runtime()
+
+    def test_one_shot_setting_is_restricted_to_daemonless_parser(self):
+        original = {
+            "TRAMITIA_PDF_BROKER_DAEMONLESS": "1",
+            "TRAMITIA_PDF_WORKER_BACKEND": "subprocess",
+            "TRAMITIA_BROKER_ALLOWED_PEER_UID": "12345",
+            "TRAMITIA_PARSER_ONE_SHOT": "1",
+        }
+        with patch.dict(os.environ, original, clear=True), patch(
+            "app.pdf_broker.os.geteuid", return_value=65533
+        ), patch("app.pdf_broker.Path.exists", return_value=False):
+            validate_broker_runtime()
+
+        for change in (
+            {"TRAMITIA_PDF_WORKER_BACKEND": "parser_socket"},
+            {"TRAMITIA_PARSER_ONE_SHOT": "yes"},
+        ):
+            with self.subTest(change=change), patch.dict(
+                os.environ, {**original, **change}, clear=True
+            ), patch("app.pdf_broker.os.geteuid", return_value=65533), patch(
                 "app.pdf_broker.Path.exists", return_value=False
             ):
                 with self.assertRaises(RuntimeError):

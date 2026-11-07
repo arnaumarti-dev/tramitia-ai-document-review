@@ -78,12 +78,16 @@ after removing the parser container.
   potentially tamper with its parser socket. It cannot use the trusted
   broker UID or reach the broker socket mount, but a compromised parser
   might persist and manipulate subsequent document results.
-- These are long-running containers and not independent single-use
-  sandboxes per document. Resource ceilings, no network and minimal
-  mounts mitigate but do not eliminate malicious PDF exploitation or
-  kernel/container breakout risks. A per-PDF disposable sandbox or VM,
-  container image review/signing and external security review are still
-  recommended.
+- The experimental parser uses `TRAMITIA_PARSER_ONE_SHOT=1`, exiting
+  after one authenticated request. Docker `restart: unless-stopped`
+  starts a fresh parser service process for the next request. This is
+  **a restart of the same container**, not a brand-new disposable container
+  or VM per PDF. Socket availability is transient during restart (503 is
+  possible), and restart latency and crash-loop behavior need monitoring.
+  Resource ceilings, no network and minimal mounts mitigate but do not
+  eliminate malicious PDF exploitation or kernel/container breakout risks.
+  Per-PDF disposable sandboxes/VMs, image review/signing and independent
+  security review remain necessary before production.
 - Linux `SO_PEERCRED` UID values depend on user namespace mappings.
   Verify against the actual host runtime (no assumption that every
   rootless Docker/userns configuration has identical mapping).

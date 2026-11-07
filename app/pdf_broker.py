@@ -120,9 +120,13 @@ class PdfBrokerServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer
     block_on_close = False
     request_queue_size = 4
 
-    def __init__(self, server_address, request_handler_class, *, allowed_peer_uid=None):
+    def __init__(self, server_address, request_handler_class, *,
+                 allowed_peer_uid=None, one_shot=False):
         self._request_slots = threading.BoundedSemaphore(MAX_CONCURRENT_BROKER_REQUESTS)
         self._allowed_peer_uid = allowed_peer_uid
+        # Opt-in parser mode handles one authenticated request before exit.
+        self._one_shot = one_shot
+        self._accepted_requests = 0
         super().__init__(server_address, request_handler_class)
 
     def process_request(self, request, client_address):
@@ -140,7 +144,7 @@ class PdfBrokerServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer
             except (OSError, struct.error):
                 self.shutdown_request(request)
                 return
-        if not self._request_slots.acquire(blocking=False):
+        if (self._one_shot and self._accepted_requests >= 1) or not self._request_slots.acquire(blocking=False):
             try:
                 request.settimeout(1)
                 _send_payload(request, {"broker_error": "busy"})
@@ -149,6 +153,9 @@ class PdfBrokerServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer
             finally:
                 self.shutdown_request(request)
             return
+        if self._one_shot:
+            # The serve_forever loop calls process_request sequentially.
+            self._accepted_requests += 1
         try:
             super().process_request(request, client_address)
         except Exception:
@@ -160,6 +167,11 @@ class PdfBrokerServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer
             super().process_request_thread(request, client_address)
         finally:
             self._request_slots.release()
+            if self._one_shot:
+                # shutdown() requires a thread distinct from serve_forever.
+                # An operator-managed container restart initializes the next
+                # service process; no runtime Docker privileges are needed.
+                self.shutdown()
 
 
 def create_server(socket_path: str) -> PdfBrokerServer:
@@ -179,8 +191,17 @@ def create_server(socket_path: str) -> PdfBrokerServer:
     if path.exists() or path.is_symlink():
         raise RuntimeError("Broker socket already exists; check stale service")
     allowed_peer_uid = _configured_peer_uid()
+    one_shot = os.getenv("TRAMITIA_PARSER_ONE_SHOT", "0")
+    if one_shot not in ("0", "1"):
+        raise RuntimeError("Invalid one-shot parser setting")
+    if one_shot == "1":
+        if (os.getenv("TRAMITIA_PDF_BROKER_DAEMONLESS") != "1"
+                or os.getenv("TRAMITIA_PDF_WORKER_BACKEND") != "subprocess"
+                or allowed_peer_uid is None):
+            raise RuntimeError("One-shot mode requires a daemonless parser service")
     server = PdfBrokerServer(
-        str(path), _Handler, allowed_peer_uid=allowed_peer_uid
+        str(path), _Handler, allowed_peer_uid=allowed_peer_uid,
+        one_shot=(one_shot == "1"),
     )
     try:
         group = os.getenv("TRAMITIA_BROKER_SOCKET_GROUP", "").strip()
@@ -238,6 +259,11 @@ def validate_broker_runtime() -> None:
     if Path("/var/run/docker.sock").exists():
         raise RuntimeError("Daemonless broker must not expose Docker socket")
     _configured_peer_uid()
+    one_shot = os.environ.get("TRAMITIA_PARSER_ONE_SHOT", "0")
+    if one_shot not in ("0", "1"):
+        raise RuntimeError("Invalid one-shot parser setting")
+    if one_shot == "1" and backend != "subprocess":
+        raise RuntimeError("Only the isolated subprocess parser can be one-shot")
     if backend == "parser_socket":
         parser_path = os.environ.get("TRAMITIA_PARSER_SOCKET", "")
         broker_path = os.environ.get("TRAMITIA_BROKER_SOCKET", _SOCKET_DEFAULT)
