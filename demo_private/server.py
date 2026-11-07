@@ -64,8 +64,8 @@ class DemoHandler(BaseHTTPRequestHandler):
         if not sep:
             return False
         return (
-            hmac.compare_digest(username, self.server.demo_username)
-            and hmac.compare_digest(password, self.server.demo_password)
+            hmac.compare_digest(username.encode("utf-8"), self.server.demo_username.encode("utf-8"))
+            and hmac.compare_digest(password.encode("utf-8"), self.server.demo_password.encode("utf-8"))
         )
 
     def _respond(self, head_only=False):
@@ -112,7 +112,7 @@ def build_server(host="0.0.0.0", port=10000, *, password=None, username="demo"):
     secret = password if password is not None else os.environ.get("TRAMITIA_DEMO_PASSWORD", "")
     if not isinstance(secret, str) or len(secret) < 32:
         raise RuntimeError("TRAMITIA_DEMO_PASSWORD must be a unique 32+ character secret")
-    if not isinstance(username, str) or not username or ":" in username:
+    if not isinstance(username, str) or not username or not username.isascii() or ":" in username:
         raise RuntimeError("Invalid demo username")
     server = ThreadingHTTPServer((host, int(port)), DemoHandler)
     server.demo_password = secret

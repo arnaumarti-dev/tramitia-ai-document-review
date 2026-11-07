@@ -55,6 +55,7 @@ class PrivateDemoSecurityTests(unittest.TestCase):
                 for user, password in (
                     ("demo", "incorrect"),
                     ("wrong", SECRET),
+                    ("démo", SECRET),
                 ):
                     status, _, _ = self.request(path, user, password)
                     self.assertEqual(status, 401)
