@@ -7,7 +7,8 @@
       POSTGRES_PASSWORD: tramitia
       POSTGRES_DB: tramitia
     ports:
-      - "5432:5432"
+      # Local development only: never expose the demo-password database to LAN.
+      - "127.0.0.1:5432:5432"
     volumes:
       - tramitia_postgres_data:/var/lib/postgresql/data
 

@@ -178,7 +178,12 @@ Default container/database settings from `docker-compose.yml`:
 - User: `tramitia`
 - Password: `tramitia`
 - Database: `tramitia`
-- Port mapping: `5432:5432`
+- Port mapping: `127.0.0.1:5432:5432` (**loopback only**; do not publish
+  the example-password database on a public or LAN interface).
+- This Compose file is for **local development only**. Do not reuse its
+  example password, open port, or default API profile in production; use
+  separately provisioned PostgreSQL credentials and the documented isolated
+  Linux service/ingress setup for any real deployment.
 
 ## API Endpoints
 

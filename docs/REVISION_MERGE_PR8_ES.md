@@ -29,6 +29,10 @@ producción ni sustituye una revisión independiente del código.
   directorio privado, y comprueba la identidad del broker por SO_PEERCRED
   antes de enviar PDFs. Nuevas pruebas de configuración y peer no confiable.
   Esto **no** sustituye una auditoría independiente.
+- [x] Despliegue local más seguro: `docker-compose.yml` limita el puerto
+  PostgreSQL de desarrollo a `127.0.0.1:5432`, con una prueba de
+  regresión de configuración. La contraseña de ejemplo sigue siendo
+  **solo para desarrollo**; no se valida ni recomienda para producción.
 - [ ] Solicitar revisión independiente de código, sobre todo autenticación,
   aislamiento del analizador, sockets Unix, rutas de borrado y permisos.
 - [ ] **Restauración de base de datos:** la CI incorpora una comprobación
