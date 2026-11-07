@@ -59,6 +59,12 @@ jobs:
       - name: Run unit and PostgreSQL isolation tests
         run: python -m unittest discover -s tests -v
 
+      - name: Measure synthetic validation signals (not real-world accuracy)
+        run: |
+          set -euo pipefail
+          python -m scripts.evaluate_validation_corpus --format markdown | tee /tmp/tramitia-quality-benchmark.md
+          cat /tmp/tramitia-quality-benchmark.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Build read-only networkless PDF container image
         run: docker build -f Dockerfile.pdf-worker -t tramitia-pdf-worker:ci .
       - name: Verify real PDF container boundaries
