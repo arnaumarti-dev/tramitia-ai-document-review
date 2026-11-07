@@ -1,0 +1,45 @@
+# Reference only. Requires dedicated tramitia-broker user and tramitia-web group.
+# Docker access is root-equivalent; run this broker on a separate host/VM
+# with an isolated Docker daemon before any production use.
+[Unit]
+Description=TramitIA restricted PDF broker (Docker control plane)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=simple
+User=tramitia-broker
+Group=tramitia-web
+SupplementaryGroups=docker
+WorkingDirectory=/opt/tramitia
+RuntimeDirectory=tramitia
+RuntimeDirectoryMode=0750
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=TRAMITIA_PDF_WORKER_BACKEND=container
+Environment=TRAMITIA_PDF_WORKER_IMAGE=tramitia-pdf-worker:local
+Environment=TRAMITIA_BROKER_SOCKET=/run/tramitia/pdf-broker.sock
+Environment=TRAMITIA_BROKER_SOCKET_GROUP=tramitia-web
+ExecStart=/opt/tramitia/.venv/bin/python -m app.pdf_broker
+Restart=on-failure
+RestartSec=3
+UMask=0027
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+PrivateTmp=true
+PrivateDevices=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+LockPersonality=true
+MemoryMax=1G
+TasksMax=64
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

@@ -267,3 +267,196 @@ test('invitation URL fragment is cleared before showing acceptance form', () => 
   assert.equal(vm.runInContext('pendingInviteToken', context), 'abcdefghijklmnopqrstuvwxyz123456');
   assert.equal(vm.runInContext('window.location.hash', context), '');
 });
+
+test('only owners and admins see safely escaped report deletion controls', async () => {
+  for (const role of ['owner', 'admin', 'employee']) {
+    const { context, element } = setup(async () => ({ ok: true, json: async () => ({
+      total: 1, items: [{ id: 42, filename: '<script>alert(1)</script>', score: 70, status: 'REVISAR' }]
+    }) }));
+    vm.runInContext(`currentRole = '${role}'`, context);
+    await context.loadAnalyses();
+    const html = element('historyBody').innerHTML;
+    assert.match(html, /&lt;script&gt;/);
+    assert.doesNotMatch(html, /<script>/);
+    assert.equal(html.includes('data-delete-id="42"'), role !== 'employee');
+    assert.match(html, /data-export-id="42"/);
+  }
+});
+
+test('cancelled report deletion sends no request and keeps the report', async () => {
+  const calls = [];
+  const { context, element } = setup(async (url, options) => {
+    calls.push({ url, options });
+    return { status: 204 };
+  });
+  vm.runInContext("currentRole = 'owner'", context);
+  context.confirm = () => false;
+  const button = element('deleteButton');
+  await context.deleteAnalysis('42', 'reporte.pdf', button);
+  assert.equal(calls.length, 0);
+  assert.equal(button.disabled, false);
+});
+
+test('report deletion requires manager role, uses bearer DELETE, refreshes and reports success', async () => {
+  const calls = [];
+  const { context, element } = setup(async (url, options = {}) => {
+    calls.push({ url, options });
+    if (options.method === 'DELETE') return { status: 204 };
+    return { ok: true, json: async () => ({ total: 0, items: [] }) };
+  });
+  const button = element('deleteButton');
+  vm.runInContext("currentRole = 'employee'", context);
+  await context.deleteAnalysis('42', 'doc.pdf', button);
+  assert.equal(calls.length, 0);
+  vm.runInContext("currentRole = 'owner'", context);
+  await context.deleteAnalysis('42', 'doc.pdf', button);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, '/analyses/42');
+  assert.equal(calls[0].options.method, 'DELETE');
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer frontend-only-test-token');
+  assert.match(calls[1].url, /^\/analyses\?/);
+  assert.match(element('historySuccess').textContent, /Informe eliminado/);
+  assert.equal(element('historyError').textContent, '');
+  assert.equal(button.disabled, false);
+});
+
+test('concurrent clicks cannot delete twice and failures do not expose server internals', async () => {
+  let resolve;
+  const calls = [];
+  const { context, element } = setup((url, options) => {
+    calls.push(url);
+    return new Promise(r => { resolve = r; });
+  });
+  vm.runInContext("currentRole = 'admin'", context);
+  const button = element('deleteButton');
+  const first = context.deleteAnalysis(42, 'doc.pdf', button);
+  await context.deleteAnalysis(42, 'doc.pdf', button);
+  assert.deepEqual(calls, ['/analyses/42']);
+  assert.equal(button.disabled, true);
+  resolve({ status: 500, json: async () => ({ detail: 'private SQL error' }) });
+  await first;
+  assert.equal(button.disabled, false);
+  assert.match(element('historyError').textContent, /No se pudo eliminar/);
+  assert.doesNotMatch(element('historyError').textContent, /private SQL/);
+});
+
+test('logout during report deletion does not restore private history or show notices', async () => {
+  let resolve;
+  const { context, element } = setup(() => new Promise(r => { resolve = r; }));
+  vm.runInContext("currentRole = 'owner'", context);
+  const first = context.deleteAnalysis(42, 'doc.pdf', element('deleteButton'));
+  context.logout();
+  resolve({ status: 204 });
+  await first;
+  assert.equal(element('historySuccess').textContent, '');
+  assert.equal(element('historyBody').innerHTML, '');
+});
+
+test('stale 401 response cannot log out a newly authenticated session', async () => {
+  let finish;
+  const { context } = setup(() => new Promise(resolve => { finish = resolve; }));
+  const oldRequest = context.apiFetch('/analyses');
+  context.logout();
+  vm.runInContext("authToken = 'new-session'", context);
+  finish({ status: 401 });
+  await assert.rejects(oldRequest, /La sesión ha caducado/);
+  assert.equal(vm.runInContext('authToken', context), 'new-session');
+});
+
+test('late report detail never renders tenant A data in tenant B session', async () => {
+  let finish;
+  const { context, element } = setup(() => new Promise(resolve => { finish = resolve; }));
+  const oldRequest = context.openDetail(123);
+  context.logout();
+  vm.runInContext("authToken = 'new-session'", context);
+  finish({ ok: true, json: async () => ({
+    id: 123, filename: 'tenant-A-private.pdf', score: 91, findings: []
+  }) });
+  await oldRequest;
+  assert.doesNotMatch(element('modalSubtitle').textContent, /tenant-A-private/);
+  assert.equal(element('modalContent').innerHTML, '');
+});
+
+test('late analysis does not repaint UI or refresh history after logout', async () => {
+  let finish;
+  const calls = [];
+  const { context, element } = setup(url => {
+    calls.push(url);
+    return new Promise(resolve => { finish = resolve; });
+  });
+  const oldRequest = context.analyze();
+  context.logout();
+  vm.runInContext("authToken = 'new-session'", context);
+  finish({ ok: true, json: async () => ({
+    id: 5, filename: 'tenant-A-private.pdf', score: 93, findings: []
+  }) });
+  await oldRequest;
+  assert.deepEqual(calls, ['/analyze']);
+  assert.equal(element('analysisCard').innerHTML, '');
+});
+
+test('late export does not download a prior tenant report', async () => {
+  let finish;
+  let alerts = 0;
+  const { context } = setup(() => new Promise(resolve => { finish = resolve; }));
+  context.alert = () => { alerts++; };
+  const oldRequest = context.downloadExport(123);
+  context.logout();
+  vm.runInContext("authToken = 'new-session'", context);
+  finish({ ok: true, blob: async () => { throw Error('Must not read old report blob'); } });
+  await oldRequest;
+  assert.equal(alerts, 0);
+});
+
+test('pending login cannot resurrect credentials after logout', async () => {
+  let finish;
+  const { context } = setup(() => new Promise(resolve => { finish = resolve; }));
+  const pending = context.login({ preventDefault() {} });
+  context.logout();
+  finish({ ok: true, json: async () => ({ access_token: 'stale-token' }) });
+  await pending;
+  assert.equal(vm.runInContext('authToken', context), null);
+});
+
+test('late staff invitation is not revealed in a later tenant session', async () => {
+  let finish;
+  const { context, element } = setup(() => new Promise(resolve => { finish = resolve; }));
+  vm.runInContext("currentRole = 'owner'", context);
+  const request = context.addStaff({ preventDefault() {} });
+  context.logout();
+  vm.runInContext("authToken = 'other-tenant'", context);
+  finish({ ok: true, json: async () => ({ invite_token: 'tenant-A-secret' }) });
+  await request;
+  assert.equal(element('staffInviteLink').value, '');
+  assert.equal(element('staffInviteLinkPanel').hidden, true);
+  assert.equal(vm.runInContext('staffMutationInProgress', context), false);
+});
+
+test('late password change cannot log out the new tenant session', async () => {
+  let finish;
+  const { context, element } = setup(() => new Promise(resolve => { finish = resolve; }));
+  element('currentPassword').value = 'old-pass';
+  element('newPassword').value = 'new-pass';
+  element('newPasswordRepeat').value = 'new-pass';
+  const request = context.updatePassword({ preventDefault() {} });
+  context.logout();
+  vm.runInContext("authToken = 'other-tenant'", context);
+  finish({ ok: true, status: 200 });
+  await request;
+  assert.equal(vm.runInContext('authToken', context), 'other-tenant');
+  assert.equal(element('passwordError').textContent, '');
+});
+
+test('late staff listing never repopulates a logged-out account', async () => {
+  let finish;
+  const { context, element } = setup(() => new Promise(resolve => { finish = resolve; }));
+  vm.runInContext("currentRole = 'owner'", context);
+  const request = context.loadStaff();
+  context.logout();
+  vm.runInContext("authToken = 'other-tenant'", context);
+  finish({ ok: true, json: async () => ({
+    items: [{ user_id: 19, email: 'tenant-A@example.invalid', role: 'admin', is_active: true }]
+  }) });
+  await request;
+  assert.equal(element('staffBody').innerHTML, '');
+});

@@ -54,6 +54,53 @@ def save_analysis(report: dict, organization_id: int) -> int:
         conn.close()
 
 
+def delete_analysis(analysis_id: int, organization_id: int, actor_user_id: int) -> bool:
+    """Atomically remove this tenant's report and record a minimal audit event."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM analyses WHERE id = %s AND organization_id = %s RETURNING id;",
+                (analysis_id, organization_id),
+            )
+            deleted = cur.fetchone() is not None
+            if deleted:
+                # An audit failure must roll back the deletion too. No sensitive
+                # filename, extracted content, IP address or document hash.
+                cur.execute(
+                    """INSERT INTO analysis_deletion_audit
+                       (organization_id, actor_user_id, analysis_id)
+                       VALUES (%s, %s, %s);""",
+                    (organization_id, actor_user_id, analysis_id),
+                )
+        conn.commit()
+        return deleted
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def list_deletion_events(organization_id: int, limit: int = 50,
+                         offset: int = 0) -> dict:
+    """Read only the current organization's minimal deletion ledger."""
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """SELECT id, analysis_id, actor_user_id, action, occurred_at
+                   FROM analysis_deletion_audit
+                   WHERE organization_id = %s
+                   ORDER BY occurred_at DESC, id DESC
+                   LIMIT %s OFFSET %s;""",
+                (organization_id, limit, offset),
+            )
+            return {"items": cur.fetchall(), "limit": limit, "offset": offset}
+    finally:
+        conn.close()
+
+
 def _build_filters(
     organization_id: int,
     filename: Optional[str],
@@ -135,7 +182,7 @@ def list_analyses(
         conn.close()
 
 
-def get_analysis_by_id(analysis_id: int, organization_id: int) -> Optional[Dict[str, Any]]:
+def get_analysis_by_id(analysis_id: int, organization_id: int, actor_user_id: int) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -153,7 +200,7 @@ def get_analysis_by_id(analysis_id: int, organization_id: int) -> Optional[Dict[
                     summary,
                     findings_json
                 FROM analyses
-                WHERE id = %s AND organization_id = %s;
+                WHERE id = %s AND organization_id = %s FOR SHARE;
                 """,
                 (analysis_id, organization_id),
             )
@@ -171,12 +218,25 @@ def get_analysis_by_id(analysis_id: int, organization_id: int) -> Optional[Dict[
                 row["findings"] = findings_raw or []
 
             row.pop("findings_json", None)
-            return row
+            # Successful accesses are logged before returning report data.
+            # The read lock and event insert share one transaction, so a
+            # failed audit insert prevents an unaudited read/export.
+            cur.execute(
+                """INSERT INTO analysis_access_audit
+                   (organization_id, actor_user_id, analysis_id, action)
+                   VALUES (%s, %s, %s, %s);""",
+                (organization_id, actor_user_id, analysis_id, "analysis.viewed"),
+            )
+        conn.commit()
+        return row
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
 
-def get_analysis_export(analysis_id: int, organization_id: int) -> Optional[Dict[str, Any]]:
+def get_analysis_export(analysis_id: int, organization_id: int, actor_user_id: int) -> Optional[Dict[str, Any]]:
     """
     Export completo: incluye findings + extracted_text + hash (si existen).
     """
@@ -199,7 +259,7 @@ def get_analysis_export(analysis_id: int, organization_id: int) -> Optional[Dict
                     extracted_text,
                     text_sha256
                 FROM analyses
-                WHERE id = %s AND organization_id = %s;
+                WHERE id = %s AND organization_id = %s FOR SHARE;
                 """,
                 (analysis_id, organization_id),
             )
@@ -217,7 +277,39 @@ def get_analysis_export(analysis_id: int, organization_id: int) -> Optional[Dict
                 row["findings"] = findings_raw or []
 
             row.pop("findings_json", None)
-            return row
+            # Successful accesses are logged before returning report data.
+            # The read lock and event insert share one transaction, so a
+            # failed audit insert prevents an unaudited read/export.
+            cur.execute(
+                """INSERT INTO analysis_access_audit
+                   (organization_id, actor_user_id, analysis_id, action)
+                   VALUES (%s, %s, %s, %s);""",
+                (organization_id, actor_user_id, analysis_id, "analysis.exported"),
+            )
+        conn.commit()
+        return row
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def list_access_events(organization_id: int, limit: int = 50,
+                       offset: int = 0) -> dict:
+    """Read minimal successful-access events from this tenant only."""
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """SELECT id, analysis_id, actor_user_id, action, occurred_at
+                   FROM analysis_access_audit
+                   WHERE organization_id = %s
+                   ORDER BY occurred_at DESC, id DESC
+                   LIMIT %s OFFSET %s;""",
+                (organization_id, limit, offset),
+            )
+            return {"items": cur.fetchall(), "limit": limit, "offset": offset}
     finally:
         conn.close()
 

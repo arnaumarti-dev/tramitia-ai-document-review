@@ -1,0 +1,84 @@
+# DEVELOPMENT REFERENCE ONLY: two containers and independent Unix socket
+# directories, with different kernel UIDs and no Docker access at runtime.
+# Operator prepares both /run paths with 0750 and ownership before startup.
+# Parser has no mount of /run/tramitia; broker sees parser socket read-only.
+services:
+  pdf-parser:
+    build:
+      context: ..
+      dockerfile: Dockerfile.pdf-broker
+    image: tramitia-pdf-broker:local
+    user: "65533:65533"
+    group_add:
+      - "65534"
+    environment:
+      TRAMITIA_PDF_BROKER_DAEMONLESS: "1"
+      TRAMITIA_PDF_WORKER_BACKEND: subprocess
+      # Restart parser service after each authenticated request.
+      TRAMITIA_PARSER_ONE_SHOT: "1"
+      TRAMITIA_BROKER_SOCKET: /run/tramitia-parser/parser.sock
+      TRAMITIA_BROKER_SOCKET_GID: "65534"
+      TRAMITIA_BROKER_ALLOWED_PEER_UID: "65534"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 1.0
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    volumes:
+      - type: bind
+        source: /run/tramitia-parser
+        target: /run/tramitia-parser
+        bind:
+          create_host_path: false
+    restart: unless-stopped
+    stop_grace_period: 20s
+
+  pdf-broker:
+    image: tramitia-pdf-broker:local
+    build:
+      context: ..
+      dockerfile: Dockerfile.pdf-broker
+    depends_on:
+      - pdf-parser
+    user: "65534:65534"
+    group_add:
+      - "${TRAMITIA_WEB_GID:?Set numeric web group ID}"
+    environment:
+      TRAMITIA_PDF_BROKER_DAEMONLESS: "1"
+      TRAMITIA_PDF_WORKER_BACKEND: parser_socket
+      TRAMITIA_BROKER_SOCKET: /run/tramitia/pdf-broker.sock
+      TRAMITIA_BROKER_SOCKET_GID: "${TRAMITIA_WEB_GID:?Set numeric web group ID}"
+      TRAMITIA_BROKER_ALLOWED_PEER_UID: "${TRAMITIA_WEB_UID:?Set numeric web user ID}"
+      TRAMITIA_PARSER_SOCKET: /run/tramitia-parser/parser.sock
+      TRAMITIA_PARSER_ALLOWED_PEER_UID: "65533"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 1.0
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    volumes:
+      - type: bind
+        source: /run/tramitia
+        target: /run/tramitia
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /run/tramitia-parser
+        target: /run/tramitia-parser
+        read_only: true
+        bind:
+          create_host_path: false
+    restart: unless-stopped
+    stop_grace_period: 20s

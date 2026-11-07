@@ -47,6 +47,13 @@ class UploadTests(unittest.TestCase):
         member = patch("app.auth.get_membership_role", return_value="owner")
         member.start()
         self.addCleanup(member.stop)
+        # Request-limit tests use a separate PostgreSQL integration suite.
+        quota = patch("app.main.consume_analysis_quota")
+        quota.start()
+        self.addCleanup(quota.stop)
+        peer = patch("app.main._consume_peer_budget")
+        peer.start()
+        self.addCleanup(peer.stop)
 
     def test_invalid_uploads_return_400_without_saving(self):
         for data in (b"", b"not a PDF", b"%PDF-1.7\ntruncated", make_pdf(True)):
@@ -79,7 +86,7 @@ class UploadTests(unittest.TestCase):
             )
             self.assertEqual(response.status_code, 200)
             save.assert_called_once()
-        with patch("app.main.MAX_UPLOAD_BYTES", len(data) - 1), patch("app.main.save_analysis") as save, patch("app.main.PdfReader") as reader:
+        with patch("app.main.MAX_UPLOAD_BYTES", len(data) - 1), patch("app.main.save_analysis") as save, patch("app.main.parse_pdf_document") as reader:
             response = self.client.post(
                 "/analyze", files={"file": ("large.pdf", data, "application/pdf")}
             )
@@ -90,7 +97,7 @@ class UploadTests(unittest.TestCase):
 
     def test_reject_non_pdf_signature_before_parser(self):
         # The client-provided filename and MIME must never prove a file is a PDF.
-        with patch("app.main.save_analysis") as save, patch("app.main.PdfReader") as reader:
+        with patch("app.main.save_analysis") as save, patch("app.main.parse_pdf_document") as reader:
             response = self.client.post(
                 "/analyze",
                 files={"file": ("fake.pdf", b"not a real PDF", "application/pdf")},
@@ -175,7 +182,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
             return 1
 
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", headers=AUTH_HEADERS) as client:
-            with patch("app.auth.get_membership_role", return_value="owner"), patch("app.main.save_analysis", side_effect=save):
+            with patch("app.auth.get_membership_role", return_value="owner"), patch("app.main._consume_peer_budget"), patch("app.main.consume_analysis_quota"), patch("app.main.save_analysis", side_effect=save):
                 response = await client.post(
                     "/analyze", files={"file": ("ok.pdf", make_pdf(), "application/pdf")}
                 )
@@ -246,12 +253,12 @@ class AuthorizationTests(unittest.TestCase):
             with patch("app.main.get_analysis_by_id", return_value=None) as detail:
                 response = self.client.get("/analyses/999", headers=AUTH_HEADERS)
                 self.assertEqual(response.status_code, 404)
-                detail.assert_called_once_with(999, 21)
+                detail.assert_called_once_with(999, 21, 11)
 
             with patch("app.main.get_analysis_export", return_value=None) as export:
                 response = self.client.get("/analyses/999/export", headers=AUTH_HEADERS)
                 self.assertEqual(response.status_code, 404)
-                export.assert_called_once_with(999, 21)
+                export.assert_called_once_with(999, 21, 11)
 
     def test_wrong_secret_rejects_token(self):
         with patch.dict(os.environ, {"TRAMITIA_JWT_SECRET": "another-valid-secret-with-more-than-32-chars"}):

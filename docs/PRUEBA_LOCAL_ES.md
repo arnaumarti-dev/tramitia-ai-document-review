@@ -55,6 +55,27 @@ Abre [http://127.0.0.1:8000/](http://127.0.0.1:8000/) y entra con el identificad
 
 Para comprobar aislamiento entre gestorías, crea una **segunda gestoría ficticia** con un correo distinto y comprueba que no aparece el documento de la primera.
 
+### Borrado controlado de informes (API)
+
+Con un token válido de **propietario o administrador**, el método
+`DELETE /analyses/{id}` responde HTTP **204** cuando borra un informe de
+la propia gestoría. Un empleado recibe **403**; sin sesión, **401**.
+Si el ID no existe o pertenece a otra gestoría, responde **404** sin
+confirmar su existencia. Al borrarlo, debe desaparecer del historial,
+detalle y exportación. Repite la prueba con informes ficticios, nunca
+con archivos de clientes.
+
+La interfaz web muestra **Eliminar** junto a cada JSON únicamente al
+propietario o administrador. Debe pedir confirmación antes de enviar la
+petición y actualizar el historial después de un HTTP 204. Un empleado no
+debe ver el botón y tampoco puede usar el endpoint por API. Para la
+demostración, elimina solo un informe ficticio y comprueba que ha desaparecido.
+
+El endpoint no
+elimina copias JSON que alguien haya descargado, backups ni registros de
+otros sistemas. Una política formal de conservación, borrado de copias de
+seguridad y registros de auditoría sigue siendo necesaria antes de producción.
+
 ## Limpieza
 
 Detén Uvicorn con **Ctrl+C**. Para detener la base de datos de pruebas:

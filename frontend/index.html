@@ -151,6 +151,8 @@
           </div>
           <button id="btnRefresh" class="btn btn-ghost" type="button">Actualizar</button>
         </div>
+        <p id="historyError" class="login-error" role="alert"></p>
+        <p id="historySuccess" class="muted" role="status" aria-live="polite"></p>
 
         <div class="filters">
           <label>
@@ -183,7 +185,7 @@
                 <th>Archivo</th>
                 <th>Estado</th>
                 <th class="right">Score</th>
-                <th class="right">Export</th>
+                <th class="right">Acciones</th>
               </tr>
             </thead>
             <tbody id="historyBody">

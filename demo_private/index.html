@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <title>TramitIA · Demo ficticia protegida</title>
+  <link rel="stylesheet" href="/demo.css">
+  <script src="/demo.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="TramitIA inicio"><span class="brand-mark">✦</span><span>Tramit<span class="ai">IA</span></span></a>
+      <div class="nav-label">ESPACIO DE PRUEBAS</div>
+      <nav aria-label="Demo">
+        <a class="nav-item selected" href="#overview"><span>▦</span> Resumen</a>
+        <a class="nav-item" href="#history"><span>▤</span> Informes ficticios</a>
+        <a class="nav-item" href="#audit"><span>◷</span> Actividad simulada</a>
+      </nav>
+      <div class="sidebar-note">
+        <div class="pill green">Entorno aislado</div>
+        <p>Sin base de datos, sin subida de archivos y sin conexión al procesador PDF.</p>
+        <p class="tiny">Cierra la ventana privada del navegador para terminar tu sesión de acceso.</p>
+      </div>
+    </aside>
+    <main class="main" id="overview">
+      <div class="topbar">
+        <div class="breadcrumb">TramitIA <span>/</span> Vista de demostración</div>
+        <div class="account"><span class="avatar">D</span> Gestoría Ficticia <span class="status-dot"></span></div>
+      </div>
+      <div class="banner" role="note"><strong>DEMO FICTICIA</strong> · Esta pantalla simula el producto con ejemplos inventados. No procesa PDFs, no almacena cambios y no es una versión comercial.</div>
+      <header class="welcome">
+        <div>
+          <p class="eyebrow">CENTRO DE REVISIÓN DOCUMENTAL</p>
+          <h1>Buenos días, <span>gestoría demo.</span></h1>
+          <p class="subtitle">Una vista previa interactiva de cómo TramitIA puede ayudarte a detectar incidencias documentales antes de la revisión humana.</p>
+        </div>
+        <button id="resetDemo" class="btn outline" type="button">↻ Reiniciar datos ficticios</button>
+      </header>
+      <section class="metrics" aria-label="Indicadores ficticios">
+        <div class="metric"><span class="metric-label">Solicitudes analizadas</span><strong id="countTotal">3</strong><small>Datos simulados</small></div>
+        <div class="metric"><span class="metric-label">Para revisión humana</span><strong id="countReview">2</strong><small>Alertas orientativas</small></div>
+        <div class="metric"><span class="metric-label">Sin incidencias detectadas</span><strong id="countOk">1</strong><small>No equivale a validez legal</small></div>
+      </section>
+      <section class="panel" id="history">
+        <div class="panel-header">
+          <div><p class="eyebrow">HISTORIAL</p><h2>Solicitudes ficticias</h2><p>Selecciona cualquier registro para ver un informe de ejemplo.</p></div>
+          <div class="tools"><label class="search-label" for="filterReports">Filtrar informes</label><input id="filterReports" class="filter" placeholder="Buscar un PDF ficticio..." autocomplete="off"></div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Documento de ejemplo</th><th>Fecha</th><th>Puntuación</th><th>Estado</th><th>Acción</th></tr></thead>
+            <tbody id="reportRows"></tbody>
+          </table>
+        </div>
+      </section>
+      <section class="layout-two">
+        <section class="panel detail" aria-live="polite">
+          <div class="panel-header"><div><p class="eyebrow">VISTA DEL INFORME</p><h2>Resultado simulado</h2></div><span class="pill">Revisión humana requerida</span></div>
+          <div id="reportDetail"></div>
+        </section>
+        <section class="panel notes" id="audit">
+          <div class="panel-header"><div><p class="eyebrow">TRAZABILIDAD</p><h2>Actividad de ejemplo</h2></div></div>
+          <p class="muted">Estas acciones se muestran solo en tu navegador. No representan una auditoría real de servidor.</p>
+          <ol class="timeline" id="eventList"></ol>
+          <div class="callout"><strong>Qué falta antes de producción</strong><p>Aislamiento completo del PDF, seguridad del despliegue, RGPD, retención definida y revisión independiente.</p></div>
+        </section>
+      </section>
+      <footer>TramitIA · Vista previa de producto · Datos 100 % inventados · Sin asesoramiento jurídico</footer>
+    </main>
+  </div>
+</body>
+</html>

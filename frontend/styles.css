@@ -836,3 +836,9 @@ button.export-link { cursor: pointer; background: transparent; border: 0; font: 
 .staff-form button { min-height: 42px; }
 #staffBody td { overflow-wrap: anywhere; }
 @media (max-width: 960px) { .staff-form { grid-template-columns: 1fr; } }
+
+/* Tenant-scoped report deletion: actions visible only to owner/admin roles. */
+.history-actions { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 12px; }
+.delete-link { cursor: pointer; background: transparent; color: #ffb4b4; border: 1px solid currentColor; border-radius: 7px; padding: 5px 9px; font: inherit; }
+.delete-link:hover, .delete-link:focus-visible { color: #fff; background: #8b1d29; }
+.delete-link:disabled { cursor: wait; opacity: .45; }

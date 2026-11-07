@@ -181,6 +181,10 @@ class CompleteGestoriaBrowserJourney(unittest.TestCase):
                 history_row.wait_for(state="visible")
                 analysis_id = int(history_row.get_attribute("data-id"))
                 self.assertGreater(analysis_id, 0)
+                # Employees can export but must never see a destructive action.
+                self.assertEqual(
+                    history_row.locator("button[data-delete-id]").count(), 0
+                )
 
                 # Both members of A may see the result. B must not see or export it.
                 owner_page.locator("#btnRefresh").click()
@@ -227,6 +231,24 @@ class CompleteGestoriaBrowserJourney(unittest.TestCase):
                 employee_page.locator(
                     "#historyBody tr", has_text=self.filename
                 ).wait_for(state="visible")
+
+                # Real browser confirmation + authorized deletion through the UI.
+                owner_history_row = owner_page.locator(
+                    "#historyBody tr", has_text=self.filename
+                )
+                self.assertEqual(
+                    owner_history_row.locator("button[data-delete-id]").count(), 1
+                )
+                owner_page.once("dialog", lambda dialog: dialog.accept())
+                owner_history_row.locator("button[data-delete-id]").click()
+                owner_page.locator("#historySuccess").get_by_text(
+                    "Informe eliminado", exact=False
+                ).wait_for(state="visible")
+                employee_page.locator("#btnRefresh").click()
+                employee_page.wait_for_function(
+                    "filename => !document.querySelector('#historyBody').textContent.includes(filename)",
+                    arg=self.filename,
+                )
 
                 context_b.close()
                 context_employee.close()
