@@ -140,13 +140,13 @@ const API = ""; // relative API: same backend that serves this frontend
 
     async function loadStaff() {
       if (currentRole !== "owner" && currentRole !== "admin") return;
-      const requestToken = authToken;
+      const requestToken = authToken, requestGeneration = sessionGeneration;
       try {
         const response = await apiFetch("/staff");
         if (!response.ok) throw new Error(staffResponseMessage(response.status));
         const data = await response.json();
         // Prevent a late response from repopulating the DOM after logout.
-        if (!authToken || authToken !== requestToken) return;
+        if (!isCurrentSession(requestToken, requestGeneration)) return;
         const items = Array.isArray(data.items) ? data.items : [];
         $("staffBody").innerHTML = items.length ? items.map((person) => {
           const canDisable = person.is_active
@@ -166,7 +166,7 @@ const API = ""; // relative API: same backend that serves this frontend
           button.addEventListener("click", () => disableStaff(button.dataset.disableId));
         });
       } catch (error) {
-        if (authToken === requestToken) {
+        if (isCurrentSession(requestToken, requestGeneration)) {
           $("staffError").textContent = error.message || "No se pudo cargar el equipo.";
         }
       }
@@ -175,6 +175,7 @@ const API = ""; // relative API: same backend that serves this frontend
     async function addStaff(event) {
       event.preventDefault();
       if (staffMutationInProgress || !authToken) return;
+      const requestToken = authToken, requestGeneration = sessionGeneration;
       clearStaffNotices();
       staffMutationInProgress = true;
       $("btnAddStaff").disabled = true;
@@ -187,8 +188,10 @@ const API = ""; // relative API: same backend that serves this frontend
             role: $("staffRole").value,
           }),
         });
+        if (!isCurrentSession(requestToken, requestGeneration)) return;
         if (!response.ok) throw new Error(staffResponseMessage(response.status));
         const result = await response.json();
+        if (!isCurrentSession(requestToken, requestGeneration)) return;
         const slug = $("loginOrg").value.trim();
         const link = window.location.origin + "/#invite=" +
           encodeURIComponent(result.invite_token) + "&org=" + encodeURIComponent(slug);
@@ -197,29 +200,39 @@ const API = ""; // relative API: same backend that serves this frontend
         $("staffEmail").value = "";
         $("staffSuccess").textContent = "Invitación creada. Envía el enlace de forma privada; caduca en 24 horas.";
       } catch (error) {
-        $("staffError").textContent = error.message || "No se pudo añadir el empleado.";
+        if (isCurrentSession(requestToken, requestGeneration)) {
+          $("staffError").textContent = error.message || "No se pudo añadir el empleado.";
+        }
       } finally {
-        staffMutationInProgress = false;
-        $("btnAddStaff").disabled = false;
+        if (isCurrentSession(requestToken, requestGeneration)) {
+          staffMutationInProgress = false;
+          $("btnAddStaff").disabled = false;
+        }
       }
     }
 
     async function disableStaff(userId) {
       if (staffMutationInProgress || !authToken) return;
       if (!confirm("¿Desactivar el acceso de este empleado?")) return;
+      const requestToken = authToken, requestGeneration = sessionGeneration;
       clearStaffNotices();
       staffMutationInProgress = true;
       try {
         const response = await apiFetch("/staff/" + encodeURIComponent(userId) + "/disable", {
           method: "POST",
         });
+        if (!isCurrentSession(requestToken, requestGeneration)) return;
         if (!response.ok) throw new Error(staffResponseMessage(response.status));
         $("staffSuccess").textContent = "Acceso desactivado.";
         await loadStaff();
       } catch (error) {
-        $("staffError").textContent = error.message || "No se pudo desactivar.";
+        if (isCurrentSession(requestToken, requestGeneration)) {
+          $("staffError").textContent = error.message || "No se pudo desactivar.";
+        }
       } finally {
-        staffMutationInProgress = false;
+        if (isCurrentSession(requestToken, requestGeneration)) {
+          staffMutationInProgress = false;
+        }
       }
     }
 
@@ -249,6 +262,7 @@ const API = ""; // relative API: same backend that serves this frontend
         return;
       }
       const btn = $("btnAcceptInvite");
+      const inviteSession = sessionGeneration, inviteToken = pendingInviteToken;
       btn.disabled = true;
       try {
         const response = await fetch(API + "/auth/invitations/accept", {
@@ -258,6 +272,7 @@ const API = ""; // relative API: same backend that serves this frontend
             password: $("inviteNewPassword").value,
           }),
         });
+        if (inviteSession !== sessionGeneration || pendingInviteToken !== inviteToken) return;
         if (!response.ok) throw new Error("Invitación inválida, caducada o ya utilizada.");
         pendingInviteToken = null;
         $("inviteNewPassword").value = "";
@@ -266,7 +281,9 @@ const API = ""; // relative API: same backend that serves this frontend
         $("loginPanel").hidden = false;
         $("loginError").textContent = "Cuenta activada. Accede con tu correo y nueva contraseña.";
       } catch (error) {
-        $("inviteAcceptError").textContent = error.message || "No se pudo aceptar la invitación.";
+        if (inviteSession === sessionGeneration && pendingInviteToken === inviteToken) {
+          $("inviteAcceptError").textContent = error.message || "No se pudo aceptar la invitación.";
+        }
       } finally {
         btn.disabled = false;
       }
@@ -274,6 +291,7 @@ const API = ""; // relative API: same backend that serves this frontend
 
     async function updatePassword(event) {
       event.preventDefault();
+      const requestToken = authToken, requestGeneration = sessionGeneration;
       $("passwordError").textContent = "";
       if ($("newPassword").value !== $("newPasswordRepeat").value) {
         $("passwordError").textContent = "Las nuevas contraseñas no coinciden.";
@@ -289,6 +307,7 @@ const API = ""; // relative API: same backend that serves this frontend
             new_password: $("newPassword").value,
           }),
         });
+        if (!isCurrentSession(requestToken, requestGeneration)) return;
         if (!response.ok) {
           if (response.status === 400) throw new Error("Contraseña actual incorrecta o repetida.");
           throw new Error("No se pudo actualizar la contraseña.");
@@ -296,7 +315,9 @@ const API = ""; // relative API: same backend that serves this frontend
         logout();
         $("loginError").textContent = "Contraseña cambiada. Inicia sesión de nuevo.";
       } catch (error) {
-        $("passwordError").textContent = error.message || "Error al cambiar la contraseña.";
+        if (isCurrentSession(requestToken, requestGeneration)) {
+          $("passwordError").textContent = error.message || "Error al cambiar la contraseña.";
+        }
       } finally {
         btn.disabled = false;
       }

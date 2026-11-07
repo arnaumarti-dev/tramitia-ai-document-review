@@ -417,3 +417,46 @@ test('pending login cannot resurrect credentials after logout', async () => {
   await pending;
   assert.equal(vm.runInContext('authToken', context), null);
 });
+
+test('late staff invitation is not revealed in a later tenant session', async () => {
+  let finish;
+  const { context, element } = setup(() => new Promise(resolve => { finish = resolve; }));
+  vm.runInContext("currentRole = 'owner'", context);
+  const request = context.addStaff({ preventDefault() {} });
+  context.logout();
+  vm.runInContext("authToken = 'other-tenant'", context);
+  finish({ ok: true, json: async () => ({ invite_token: 'tenant-A-secret' }) });
+  await request;
+  assert.equal(element('staffInviteLink').value, '');
+  assert.equal(element('staffInviteLinkPanel').hidden, true);
+  assert.equal(vm.runInContext('staffMutationInProgress', context), false);
+});
+
+test('late password change cannot log out the new tenant session', async () => {
+  let finish;
+  const { context, element } = setup(() => new Promise(resolve => { finish = resolve; }));
+  element('currentPassword').value = 'old-pass';
+  element('newPassword').value = 'new-pass';
+  element('newPasswordRepeat').value = 'new-pass';
+  const request = context.updatePassword({ preventDefault() {} });
+  context.logout();
+  vm.runInContext("authToken = 'other-tenant'", context);
+  finish({ ok: true, status: 200 });
+  await request;
+  assert.equal(vm.runInContext('authToken', context), 'other-tenant');
+  assert.equal(element('passwordError').textContent, '');
+});
+
+test('late staff listing never repopulates a logged-out account', async () => {
+  let finish;
+  const { context, element } = setup(() => new Promise(resolve => { finish = resolve; }));
+  vm.runInContext("currentRole = 'owner'", context);
+  const request = context.loadStaff();
+  context.logout();
+  vm.runInContext("authToken = 'other-tenant'", context);
+  finish({ ok: true, json: async () => ({
+    items: [{ user_id: 19, email: 'tenant-A@example.invalid', role: 'admin', is_active: true }]
+  }) });
+  await request;
+  assert.equal(element('staffBody').innerHTML, '');
+});
