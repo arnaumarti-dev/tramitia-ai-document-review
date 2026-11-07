@@ -130,6 +130,10 @@ probe.close()
 print("Broker sees a separate parser UID and read-only socket mount")
 '
 
+# A credential-probing connection with no PDF bytes must not restart
+# or consume the parser's single authorized document allowance.
+test "$(docker inspect -f '{{.RestartCount}}' "$parser")" = 0
+
 # Real web-account integration with a disposable invented PDF, no JWT/DB.
 cp -a app scripts "$stage_dir/"
 sudo chown -R root:root "$stage_dir"

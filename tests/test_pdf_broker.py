@@ -131,6 +131,14 @@ class BrokerProtocolTests(unittest.TestCase):
                 )
                 thread.start()
                 try:
+                    # Inspecting a socket peer or disconnecting without
+                    # submitting PDF bytes cannot spend the sole request.
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                        probe.settimeout(3)
+                        probe.connect(path)
+                    time.sleep(0.05)
+                    self.assertTrue(thread.is_alive())
+                    self.assertEqual(server._accepted_requests, 0)
                     sample = make_demo_pdf()
                     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
                         sock.settimeout(3)

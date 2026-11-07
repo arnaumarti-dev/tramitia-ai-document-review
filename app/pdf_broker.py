@@ -89,6 +89,11 @@ class _Handler(socketserver.BaseRequestHandler):
                 return
             # Never read more than the validated PDF byte count.
             data = _read_exact(self.request, length, deadline=deadline)
+            if self.server._one_shot:
+                # A mere socket connection, empty request, or malformed
+                # header is NOT a completed PDF request. Those must not
+                # consume the one-shot parser's processing budget.
+                self.server._accepted_requests += 1
             try:
                 text, count = parse_pdf_document(
                     data, max_pages=pages, max_chars=chars
@@ -153,9 +158,6 @@ class PdfBrokerServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer
             finally:
                 self.shutdown_request(request)
             return
-        if self._one_shot:
-            # The serve_forever loop calls process_request sequentially.
-            self._accepted_requests += 1
         try:
             super().process_request(request, client_address)
         except Exception:
@@ -167,7 +169,7 @@ class PdfBrokerServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer
             super().process_request_thread(request, client_address)
         finally:
             self._request_slots.release()
-            if self._one_shot:
+            if self._one_shot and self._accepted_requests:
                 # shutdown() requires a thread distinct from serve_forever.
                 # An operator-managed container restart initializes the next
                 # service process; no runtime Docker privileges are needed.
