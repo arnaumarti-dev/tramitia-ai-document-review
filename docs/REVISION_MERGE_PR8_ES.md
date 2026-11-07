@@ -21,6 +21,11 @@ producción ni sustituye una revisión independiente del código.
   (otro repositorio, `autoDeploy=off`) no despliegan TramitIA desde
   `main`. Comprobado el 7 de noviembre de 2026. Esto no acredita
   configuraciones de otros hosts o proveedores.
+- [x] Revisión focalizada del enlace API-broker: el perfil aislado ahora
+  impide que la cuenta web sea propietaria o tenga escritura sobre el
+  directorio privado, y comprueba la identidad del broker por SO_PEERCRED
+  antes de enviar PDFs. Nuevas pruebas de configuración y peer no confiable.
+  Esto **no** sustituye una auditoría independiente.
 - [ ] Solicitar revisión independiente de código, sobre todo autenticación,
   aislamiento del analizador, sockets Unix, rutas de borrado y permisos.
 - [ ] **Restauración de base de datos:** la CI incorpora una comprobación

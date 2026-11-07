@@ -42,19 +42,28 @@ def validate_web_deployment() -> None:
     if directory.is_symlink():
         raise RuntimeError("PDF broker socket directory must not be a symlink")
     try:
-        directory_mode = directory.stat().st_mode
+        directory_info = directory.stat()
     except OSError as exc:
         raise RuntimeError("PDF broker socket directory is unavailable") from exc
-    if not stat.S_ISDIR(directory_mode) or directory_mode & (stat.S_IWGRP | stat.S_IWOTH):
+    if (not stat.S_ISDIR(directory_info.st_mode)
+            or directory_info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)):
         raise RuntimeError("PDF broker directory must not be group/world writable")
+    # Owner can chmod a directory even if currently mode 0500. A web-owned
+    # directory would permit replacing the socket after this startup guard.
+    if directory_info.st_uid == os.geteuid():
+        raise RuntimeError("FastAPI must not own the broker socket directory")
+    if os.access(directory, os.W_OK):
+        raise RuntimeError("FastAPI must not be able to replace the broker socket")
     try:
-        mode = socket_path.stat().st_mode
+        socket_info = socket_path.stat()
     except OSError as exc:
         raise RuntimeError("PDF broker socket is unavailable") from exc
-    if not stat.S_ISSOCK(mode):
+    if not stat.S_ISSOCK(socket_info.st_mode):
         raise RuntimeError("PDF broker socket is not a Unix socket")
-    if mode & stat.S_IWOTH:
+    if socket_info.st_mode & stat.S_IWOTH:
         raise RuntimeError("PDF broker socket must not be world writable")
+    if socket_info.st_uid in (0, os.geteuid()):
+        raise RuntimeError("The broker socket must belong to a distinct non-root account")
     if not os.access(socket_path, os.W_OK):
         raise RuntimeError("FastAPI cannot access its private PDF broker socket")
 

@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import signal
 import socket
+import stat
 import struct
 import subprocess
 import sys
@@ -112,8 +113,9 @@ def _request_fixed_socket(
 ) -> bytes:
     """Fixed binary protocol, optionally binding trust to the kernel peer UID.
 
-    The broker-to-parser link MUST authenticate the other service before
-    transmitting an untrusted PDF. Only Linux SO_PEERCRED may establish UID.
+    Isolated Web-to-broker and broker-to-parser links MUST authenticate the
+    other service before transmitting untrusted PDF bytes. Linux SO_PEERCRED
+    supplies the actual socket peer UID, never an untrusted payload field.
     """
     if not hasattr(socket, "AF_UNIX") or not Path(target).is_absolute():
         raise PdfProcessingError(503, "Ruta o servicio PDF aislado no válido.")
@@ -148,10 +150,30 @@ def _request_fixed_socket(
 
 
 def _broker_request(data: bytes, max_pages: int, max_chars: int) -> bytes:
-    """Web -> broker. No Docker CLI, host daemon or arbitrary commands."""
+    """Web -> broker. Isolated mode authenticates the kernel peer UID.
+
+    The expected UID comes from a socket in a protected, broker-owned
+    directory; it is also checked at connection time using SO_PEERCRED.
+    A replaced socket owned by another account cannot receive PDF bytes.
+    """
     target = os.getenv("TRAMITIA_BROKER_SOCKET", "/run/tramitia/pdf-broker.sock")
+    expected_uid = None
+    if os.getenv("TRAMITIA_DEPLOYMENT_PROFILE", "development") == "isolated":
+        if sys.platform != "linux" or not hasattr(socket, "SO_PEERCRED"):
+            raise PdfProcessingError(503, "No se puede verificar la identidad del broker.")
+        path = Path(target)
+        try:
+            if not path.is_absolute() or path.is_symlink():
+                raise PdfProcessingError(503, "Socket del broker no válido.")
+            details = path.stat()
+        except OSError as exc:
+            raise PdfProcessingError(503, "Socket del broker no disponible.") from exc
+        if (not stat.S_ISSOCK(details.st_mode)
+                or details.st_uid in (0, os.geteuid())):
+            raise PdfProcessingError(503, "Identidad del broker no válida.")
+        expected_uid = details.st_uid
     return _request_fixed_socket(
-        data, max_pages, max_chars, target=target
+        data, max_pages, max_chars, target=target, expected_peer_uid=expected_uid
     )
 
 

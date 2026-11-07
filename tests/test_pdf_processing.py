@@ -2,6 +2,9 @@
 import io
 import json
 import os
+import socket
+import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -110,6 +113,65 @@ class PDFWorkerFailureTests(unittest.TestCase):
             expected_peer_uid=65533,
         )
         spawn.assert_not_called()
+
+    @unittest.skipUnless(
+        hasattr(socket, "SO_PEERCRED") and sys.platform == "linux",
+        "Linux peer credentials required",
+    )
+    def test_isolated_web_authenticates_broker_before_sending_pdf(self):
+        with patch.dict(os.environ, {
+            "TRAMITIA_DEPLOYMENT_PROFILE": "isolated",
+            "TRAMITIA_BROKER_SOCKET": "/run/tramitia/pdf-broker.sock",
+        }), patch("app.pdf_processing.Path.is_symlink", return_value=False), patch(
+            "app.pdf_processing.Path.stat",
+            return_value=SimpleNamespace(st_mode=stat.S_IFSOCK | 0o660, st_uid=65534)
+        ), patch("app.pdf_processing.os.geteuid", return_value=12345), patch(
+            "app.pdf_processing._request_fixed_socket", return_value=b"dummy"
+        ) as request:
+            from app.pdf_processing import _broker_request
+            self.assertEqual(_broker_request(b"%PDF-fictional", 1, 100), b"dummy")
+            request.assert_called_once_with(
+                b"%PDF-fictional", 1, 100,
+                target="/run/tramitia/pdf-broker.sock", expected_peer_uid=65534
+            )
+
+    @unittest.skipUnless(
+        hasattr(socket, "SO_PEERCRED") and sys.platform == "linux",
+        "Linux peer credentials required",
+    )
+    def test_isolated_web_rejects_unsafe_broker_uid_before_sending_pdf(self):
+        from app.pdf_processing import _broker_request
+        for bad_uid in (0, 12345):
+            with self.subTest(uid=bad_uid), patch.dict(os.environ, {
+                "TRAMITIA_DEPLOYMENT_PROFILE": "isolated",
+                "TRAMITIA_BROKER_SOCKET": "/run/tramitia/pdf-broker.sock",
+            }), patch("app.pdf_processing.Path.is_symlink", return_value=False), patch(
+                "app.pdf_processing.Path.stat",
+                return_value=SimpleNamespace(st_mode=stat.S_IFSOCK | 0o660, st_uid=bad_uid)
+            ), patch("app.pdf_processing.os.geteuid", return_value=12345), patch(
+                "app.pdf_processing._request_fixed_socket"
+            ) as send:
+                with self.assertRaises(PdfProcessingError) as err:
+                    _broker_request(b"%PDF-fictional", 1, 100)
+                self.assertEqual(err.exception.status_code, 503)
+                send.assert_not_called()
+
+    @unittest.skipUnless(
+        hasattr(socket, "SO_PEERCRED") and sys.platform == "linux",
+        "Linux peer credentials required",
+    )
+    def test_unexpected_peer_uid_is_denied_before_pdf_transfer(self):
+        from app.pdf_processing import _request_fixed_socket
+        with patch("app.pdf_processing.socket.socket") as constructor:
+            peer = constructor.return_value.__enter__.return_value
+            peer.getsockopt.return_value = struct.pack("3i", 123, 65532, 65532)
+            with self.assertRaises(PdfProcessingError) as err:
+                _request_fixed_socket(
+                    b"%PDF-fictional", 1, 100,
+                    target="/run/tramitia/pdf-broker.sock", expected_peer_uid=65534
+                )
+            self.assertEqual(err.exception.status_code, 503)
+            peer.sendall.assert_not_called()
 
     def test_parser_socket_requires_distinct_explicit_uid(self):
         for peer in ("", "65534", "0", "not-a-uid"):

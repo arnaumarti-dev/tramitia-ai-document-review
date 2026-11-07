@@ -18,6 +18,9 @@ class IsolatedWebStartupTests(unittest.TestCase):
     def setUp(self):
         if not hasattr(socket, "AF_UNIX") or os.name != "posix":
             self.skipTest("POSIX Unix socket needed")
+        # Simulate a dedicated web UID different from the test runner's
+        # socket/directory owner, including on developer machines with UID 1000.
+        self.test_web_uid = os.getuid() + 10000
         self.folder = tempfile.TemporaryDirectory(prefix="tramitia-isolated-")
         self.path = str(Path(self.folder.name) / "broker.sock")
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -41,10 +44,12 @@ class IsolatedWebStartupTests(unittest.TestCase):
     def fake_access(path, mode):
         if str(path) == "/var/run/docker.sock":
             return False
+        if os.path.isdir(path) and mode == os.W_OK:
+            return False
         return os.path.exists(path)
 
     def test_isolated_mode_startup_succeeds_only_with_private_socket(self):
-        with patch("app.deployment_guard.os.geteuid", return_value=1000), patch(
+        with patch("app.deployment_guard.os.geteuid", return_value=self.test_web_uid), patch(
             "app.deployment_guard.os.access", side_effect=self.fake_access
         ):
             validate_web_deployment()
@@ -56,21 +61,21 @@ class IsolatedWebStartupTests(unittest.TestCase):
         with patch("app.deployment_guard.os.geteuid", return_value=0):
             with self.assertRaisesRegex(RuntimeError, "root"):
                 validate_web_deployment()
-        with patch("app.deployment_guard.os.geteuid", return_value=1000), patch.dict(
+        with patch("app.deployment_guard.os.geteuid", return_value=self.test_web_uid), patch.dict(
             os.environ, {"TRAMITIA_PDF_WORKER_BACKEND": "subprocess"}
         ):
             with self.assertRaisesRegex(RuntimeError, "broker"):
                 validate_web_deployment()
 
     def test_web_account_must_not_access_docker_socket(self):
-        with patch("app.deployment_guard.os.geteuid", return_value=1000), patch(
+        with patch("app.deployment_guard.os.geteuid", return_value=self.test_web_uid), patch(
             "app.deployment_guard.Path.exists", return_value=True
         ), patch("app.deployment_guard.os.access", return_value=True):
             with self.assertRaisesRegex(RuntimeError, "Docker"):
                 validate_web_deployment()
 
     def test_fail_closed_when_broker_absent_or_insecure(self):
-        with patch("app.deployment_guard.os.geteuid", return_value=1000), patch(
+        with patch("app.deployment_guard.os.geteuid", return_value=self.test_web_uid), patch(
             "app.deployment_guard.os.access", side_effect=self.fake_access
         ):
             with patch.dict(os.environ, {
@@ -92,13 +97,51 @@ class IsolatedWebStartupTests(unittest.TestCase):
         directory = Path(self.folder.name)
         directory.chmod(0o770)
         try:
-            with patch("app.deployment_guard.os.geteuid", return_value=1000), patch(
+            with patch("app.deployment_guard.os.geteuid", return_value=self.test_web_uid), patch(
                 "app.deployment_guard.os.access", side_effect=self.fake_access
             ):
                 with self.assertRaisesRegex(RuntimeError, "group/world writable"):
                     validate_web_deployment()
         finally:
             directory.chmod(0o700)
+
+    def test_rejects_web_owned_directory_even_without_write_bit(self):
+        # Same UID as the directory owner can chmod it later. Refuse startup.
+        with patch("app.deployment_guard.os.geteuid", return_value=os.getuid()), patch(
+            "app.deployment_guard.os.access", side_effect=self.fake_access
+        ):
+            with self.assertRaisesRegex(RuntimeError, "must not own"):
+                validate_web_deployment()
+
+    def test_rejects_web_writable_directory_even_when_not_group_writable(self):
+        def writable_dir(path, mode):
+            if str(path) == self.folder.name and mode == os.W_OK:
+                return True
+            return self.fake_access(path, mode)
+
+        with patch("app.deployment_guard.os.geteuid", return_value=self.test_web_uid), patch(
+            "app.deployment_guard.os.access", side_effect=writable_dir
+        ):
+            with self.assertRaisesRegex(RuntimeError, "replace the broker socket"):
+                validate_web_deployment()
+
+    def test_rejects_socket_owned_by_web_uid(self):
+        with patch("app.deployment_guard.os.geteuid", return_value=os.getuid()), patch(
+            "app.deployment_guard.os.access", side_effect=self.fake_access
+        ), patch("app.deployment_guard.Path.stat", autospec=True) as get_stat:
+            real_directory = os.stat(self.folder.name)
+            real_socket = os.stat(self.path)
+            class Stub:
+                def __init__(self, info, uid):
+                    self.st_mode = info.st_mode
+                    self.st_uid = uid
+            get_stat.side_effect = lambda target: (
+                Stub(real_directory, os.getuid() + 10000)
+                if str(target) == self.folder.name
+                else Stub(real_socket, os.getuid())
+            )
+            with self.assertRaisesRegex(RuntimeError, "distinct non-root"):
+                validate_web_deployment()
 
     def test_unknown_profile_is_rejected(self):
         with patch.dict(os.environ, {
