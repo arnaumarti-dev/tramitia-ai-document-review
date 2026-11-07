@@ -13,7 +13,9 @@ _DATE_YMD = re.compile(r"(?<!\d)(\d{4})([./-])(\d{1,2})\2(\d{1,2})(?!\d)")
 _SIGNATURE_WORDS = re.compile(r"\b(?:firma|firmad[oa])\b", re.IGNORECASE)
 _EXPLICITLY_UNSIGNED = re.compile(
     r"\b(?:sin\s+firma|falta\s+(?:la\s+)?firma|firma\s+(?:pendiente|ausente)"
-    r"|pendiente\s+de\s+firma|no\s+(?:est[aá]\s+)?firmad[oa])\b",
+    r"|pendiente\s+de\s+firma|no\s+(?:est[aá]\s+)?firmad[oa]"
+    r"|no\s+consta\s+(?:la\s+)?firma|no\s+se\s+ha\s+firmad[oa]"
+    r"|sin\s+datos\s+de\s+firma)\b",
     re.IGNORECASE,
 )
 
