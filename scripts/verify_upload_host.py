@@ -106,6 +106,23 @@ def verify_nginx_config(config: str) -> None:
     )
     if len(blocks) != 1 or not re.search(r"\bproxy_request_buffering\s+off\s*;", blocks[0]):
         raise HostCheckError("NGINX /analyze does not unambiguously disable request buffering")
+    if not re.search(r"\bauth_request\s+/_tramitia_upload_auth\s*;", blocks[0]):
+        raise HostCheckError("NGINX /analyze lacks authorization before streaming")
+    internal = re.findall(
+        r"\blocation\s*=\s*/_tramitia_upload_auth\s*\{([^{}]*)\}",
+        directives, flags=re.DOTALL,
+    )
+    if len(internal) != 1:
+        raise HostCheckError("Missing single internal NGINX upload auth location")
+    for expr in (
+        r"\binternal\s*;",
+        r"\bproxy_pass_request_body\s+off\s*;",
+        r"\bproxy_set_header\s+Content-Length\s+\"\"\s*;",
+        r"\bproxy_set_header\s+Authorization\s+\$http_authorization\s*;",
+        r"\bproxy_pass\s+http://127\.0\.0\.1:8000/auth/me\s*;",
+    ):
+        if not re.search(expr, internal[0]):
+            raise HostCheckError("Unsafe or missing NGINX upload auth subrequest setting")
 
 
 def _run_read_only(*args: str) -> str:
