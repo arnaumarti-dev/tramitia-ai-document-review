@@ -6,11 +6,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-from app.auth import current_principal
+os.environ.setdefault("TRAMITIA_JWT_SECRET", "synthetic-combined-b02-h06-test-secret-32-characters")
+from app.auth import Principal, issue_token
 from app.main import app
 from app.upload_temporary_storage import _filesystem_type, verify_private_upload_tmpfs
 
@@ -78,27 +78,28 @@ class PrivateUploadStorageTests(unittest.TestCase):
                 return item
 
             data = b"%PDF-1.7\n" + b"A" * (20 * 1024 * 1024 - 9)
-            inner = app.app
-            inner.dependency_overrides[current_principal] = lambda: SimpleNamespace(
-                user_id=1, organization_id=1, role="owner"
-            )
-            try:
-                with patch.dict(os.environ, {"TMPDIR": folder}), patch("tempfile.tempdir", None), patch.object(
-                    formparsers, "SpooledTemporaryFile", side_effect=recording_spool
-                ), patch("app.main._consume_peer_budget"), patch(
-                    "app.main.consume_analysis_quota"
-                ), patch("app.main.save_analysis", return_value=99), patch(
-                    "app.main.parse_pdf_document", return_value=("Solicitud ficticia para pruebas de seguridad.", 1)
-                ) as parse:
-                    response = TestClient(app, raise_server_exceptions=False).post(
-                        "/analyze",
-                        files={"file": ("synthetic.pdf", data, "application/pdf")},
-                    )
-                    self.assertEqual(response.status_code, 200, response.text)
-                    self.assertEqual(response.json()["id"], 99)
-                    self.assertEqual(len(parse.call_args.args[0]), 20 * 1024 * 1024)
-            finally:
-                inner.dependency_overrides.pop(current_principal, None)
+            # Exercise BOTH H06's pre-multipart membership gate and the
+            # endpoint re-check, with a synthetic signed token and no DB.
+            token = issue_token(Principal(1, 1, "owner"))
+            with patch.dict(os.environ, {"TMPDIR": folder}), patch("tempfile.tempdir", None), patch.object(
+                formparsers, "SpooledTemporaryFile", side_effect=recording_spool
+            ), patch("app.auth.get_membership_role", return_value="owner") as membership, patch(
+                "app.main._consume_peer_budget"
+            ), patch("app.main.consume_analysis_quota"), patch(
+                "app.main.save_analysis", return_value=99
+            ), patch(
+                "app.main.parse_pdf_document",
+                return_value=("Solicitud ficticia para pruebas de seguridad.", 1),
+            ) as parse:
+                response = TestClient(app, raise_server_exceptions=False).post(
+                    "/analyze",
+                    headers={"Authorization": "Bearer " + token},
+                    files={"file": ("synthetic.pdf", data, "application/pdf")},
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["id"], 99)
+                self.assertEqual(len(parse.call_args.args[0]), 20 * 1024 * 1024)
+                self.assertGreaterEqual(membership.call_count, 2)
             self.assertTrue(observed, "Starlette did not create an upload spool")
             self.assertTrue(any(getattr(item, "_rolled", False) for item in observed))
             self.assertTrue(all(item.closed for item in observed))
