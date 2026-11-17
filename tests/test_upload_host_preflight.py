@@ -20,6 +20,7 @@ http {
   server { client_max_body_size 21m; proxy_http_version 1.1;
     location = /_tramitia_upload_auth {
       internal;
+      proxy_method GET;
       proxy_pass http://127.0.0.1:8000/auth/me;
       proxy_pass_request_body off;
       proxy_set_header Content-Length "";
@@ -70,6 +71,7 @@ class HostPreflightTests(unittest.TestCase):
         for original, weakened in (
             ("auth_request /_tramitia_upload_auth;", ""),
             ("internal;", ""),
+            ("proxy_method GET;", "proxy_method POST;"),
             ("proxy_pass_request_body off;", "proxy_pass_request_body on;"),
             ('proxy_set_header Content-Length "";', ""),
             ("proxy_set_header Authorization $http_authorization;", ""),
