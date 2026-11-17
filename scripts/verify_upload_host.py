@@ -116,6 +116,7 @@ def verify_nginx_config(config: str) -> None:
         raise HostCheckError("Missing single internal NGINX upload auth location")
     for expr in (
         r"\binternal\s*;",
+        r"\bproxy_method\s+GET\s*;",
         r"\bproxy_pass_request_body\s+off\s*;",
         r"\bproxy_set_header\s+Content-Length\s+\"\"\s*;",
         r"\bproxy_set_header\s+Authorization\s+\$http_authorization\s*;",
