@@ -144,7 +144,7 @@ class PrivateUploadStorageTests(unittest.TestCase):
             for item in ("Environment=TMPDIR=/run/tramitia-upload",
                          "RuntimeDirectory=tramitia-upload",
                          "RuntimeDirectoryMode=0700",
-                         "UMask=0077"):
+                         "UMask=0077", "LimitCORE=0"):
                 self.assertIn(item, systemd)
 
 
