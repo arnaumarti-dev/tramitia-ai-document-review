@@ -31,12 +31,15 @@ sed -e 's/listen 80 default_server;/listen 127.0.0.1:18080 default_server;/' \
     -e 's/listen 80;/listen 127.0.0.1:18080;/' \
     -e 's/listen 443 ssl default_server;/listen 127.0.0.1:18443 ssl default_server;/' \
     -e 's/listen 443 ssl;/listen 127.0.0.1:18443 ssl;/' \
+    -e 's@proxy_pass http://127.0.0.1:8000/auth/me;@proxy_pass http://127.0.0.1:18081/auth/me;@g' \
     -e 's@proxy_pass http://127.0.0.1:8000;@proxy_pass http://127.0.0.1:18081;@g' \
     deploy/nginx/nginx.conf > "$workdir/nginx.conf"
 grep -q "listen 127.0.0.1:18443 ssl;" "$workdir/nginx.conf"
 grep -q "listen 127.0.0.1:18443 ssl default_server;" "$workdir/nginx.conf"
 grep -q "listen 127.0.0.1:18080;" "$workdir/nginx.conf"
 grep -q "listen 127.0.0.1:18080 default_server;" "$workdir/nginx.conf"
+grep -q "auth_request /_tramitia_upload_auth;" "$workdir/nginx.conf"
+grep -q "proxy_pass http://127.0.0.1:18081/auth/me;" "$workdir/nginx.conf"
 nginx_uid=$(docker run --rm --entrypoint sh nginx:1.27-alpine -c 'id -u nginx')
 nginx_gid=$(docker run --rm --entrypoint sh nginx:1.27-alpine -c 'id -g nginx')
 [[ "$nginx_uid" =~ ^[0-9]+$ && "$nginx_gid" =~ ^[0-9]+$ ]]
