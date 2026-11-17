@@ -31,12 +31,15 @@ sed -e 's/listen 80 default_server;/listen 127.0.0.1:18080 default_server;/' \
     -e 's/listen 80;/listen 127.0.0.1:18080;/' \
     -e 's/listen 443 ssl default_server;/listen 127.0.0.1:18443 ssl default_server;/' \
     -e 's/listen 443 ssl;/listen 127.0.0.1:18443 ssl;/' \
+    -e 's@proxy_pass http://127.0.0.1:8000/auth/me;@proxy_pass http://127.0.0.1:18081/auth/me;@g' \
     -e 's@proxy_pass http://127.0.0.1:8000;@proxy_pass http://127.0.0.1:18081;@g' \
     deploy/nginx/nginx.conf > "$workdir/nginx.conf"
 grep -q "listen 127.0.0.1:18443 ssl;" "$workdir/nginx.conf"
 grep -q "listen 127.0.0.1:18443 ssl default_server;" "$workdir/nginx.conf"
 grep -q "listen 127.0.0.1:18080;" "$workdir/nginx.conf"
 grep -q "listen 127.0.0.1:18080 default_server;" "$workdir/nginx.conf"
+grep -q "auth_request /_tramitia_upload_auth;" "$workdir/nginx.conf"
+grep -q "proxy_pass http://127.0.0.1:18081/auth/me;" "$workdir/nginx.conf"
 nginx_uid=$(docker run --rm --entrypoint sh nginx:1.27-alpine -c 'id -u nginx')
 nginx_gid=$(docker run --rm --entrypoint sh nginx:1.27-alpine -c 'id -g nginx')
 [[ "$nginx_uid" =~ ^[0-9]+$ && "$nginx_gid" =~ ^[0-9]+$ ]]
@@ -85,9 +88,35 @@ for name, size in [("twenty.pdf", 20 * 1024 * 1024),
         file.write(b"%PDF-1.7\n")
         file.truncate(size)
 PY
+# Issue a short-lived synthetic JWT with a test-only secret. Do not print it.
+if [[ -z "${TRAMITIA_JWT_SECRET:-}" ]]; then
+  TRAMITIA_JWT_SECRET=$(python -c 'import secrets;print(secrets.token_urlsafe(48))')
+  export TRAMITIA_JWT_SECRET
+fi
+TRAMITIA_B02_TEST_TOKEN=$(python - <<'PY'
+from app.auth import Principal, issue_token
+print(issue_token(Principal(1, 1, "owner")))
+PY
+)
+export TRAMITIA_B02_TEST_TOKEN
 start_backend
 test "$(curl_proxy -o "$workdir/health.json" -w '%{http_code}' https://tramitia.example.invalid:18443/health)" = 200
-code=$(curl_proxy -o "$workdir/accepted.json" -w '%{http_code}' \
+# H06: A whole synthetic multipart payload is denied before parsing when
+# unauthenticated, even though NGINX streams the body.
+code=$(curl_proxy -o "$workdir/anonymous.json" -w '%{http_code}' \
+  -F "file=@$workdir/twenty.pdf;filename=anonymous.pdf;type=application/pdf" \
+  https://tramitia.example.invalid:18443/analyze || true)
+if [[ "$code" != 401 ]]; then
+  echo "Anonymous upload should return 401, got HTTP $code" >&2
+  # Test-only NGINX error output. Do not print tokens, sensitive env or
+  # customer uploads; requests here use synthetic example.invalid data.
+  docker logs --tail 70 "$container" 2>&1 | grep -E 'auth request|upstream|error|emerg|warn' >&2 || true
+  echo "Synthetic unauthenticated proxy integration failed" >&2
+  exit 1
+fi
+check_clean
+echo "Anonymous 20 MiB multipart rejected before FastAPI spool: PASS"
+code=$(curl_proxy -H "Authorization: Bearer $TRAMITIA_B02_TEST_TOKEN" -o "$workdir/accepted.json" -w '%{http_code}' \
   -F "file=@$workdir/twenty.pdf;filename=synthetic.pdf;type=application/pdf" \
   https://tramitia.example.invalid:18443/analyze)
 if [[ "$code" != 200 ]]; then echo "20 MiB upload got $code" >&2; cat "$workdir/accepted.json" >&2; exit 1; fi
@@ -110,13 +139,14 @@ echo "NGINX >21 MiB rejection: PASS"
 # anonymous tempfile descriptor before killing FastAPI with SIGKILL.
 partial_upload() {
   python - "$1" <<'PY'
-import socket, ssl, sys, time
+import os, socket, ssl, sys, time
 mode=sys.argv[1]
 boundary=b"synthetic-test-boundary"
 opening=(b"--"+boundary+b"\r\n"
          b'Content-Disposition: form-data; name="file"; filename="partial.pdf"\r\n'
          b"Content-Type: application/pdf\r\n\r\n%PDF-1.7\n")
 header=(b"POST /analyze HTTP/1.1\r\nHost: tramitia.example.invalid\r\n"
+        b"Authorization: Bearer " + os.environ["TRAMITIA_B02_TEST_TOKEN"].encode("ascii") + b"\r\n"
         b"Content-Type: multipart/form-data; boundary="+boundary+b"\r\n"
         b"Content-Length: 20971520\r\nConnection: close\r\n\r\n")
 ctx=ssl._create_unverified_context()
@@ -162,7 +192,7 @@ hold_pid=""
 sleep 1
 check_clean
 start_backend
-code=$(curl_proxy -o "$workdir/recovered.json" -w '%{http_code}' \
+code=$(curl_proxy -H "Authorization: Bearer $TRAMITIA_B02_TEST_TOKEN" -o "$workdir/recovered.json" -w '%{http_code}' \
   -F "file=@$workdir/twenty.pdf;filename=recovered.pdf;type=application/pdf" \
   https://tramitia.example.invalid:18443/analyze)
 test "$code" = 200 || { echo "Post-SIGKILL 20 MiB upload got $code" >&2; exit 1; }
