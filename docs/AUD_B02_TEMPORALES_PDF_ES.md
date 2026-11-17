@@ -25,6 +25,24 @@ sudo nginx -t
 
 El directorio de NGINX en `/run` desaparece después de un reinicio: crear una unidad/tmpfiles.d verificada que lo prepare **antes** de NGINX. No asumir que `nginx -t` demuestra la seguridad de sus montajes. Evitar logs de cuerpos multipart, paths de documentos sensibles y volcados de memoria.
 
+### Comprobación de host sin cambios (solo Linux de laboratorio)
+
+Tras instalar **las unidades systemd realmente utilizadas**, configurar NGINX, reiniciar los servicios en un host de laboratorio y verificar que escuchan solo donde corresponde:
+
+```bash
+# Sustituye www-data por el usuario real de los workers de NGINX.
+# Ejecuta el script desde la raíz del repositorio.
+sudo python -m scripts.verify_upload_host \
+  --web-unit tramitia-web-daemonless.service \
+  --nginx-user www-data
+```
+
+El comando solo lee `/proc/self/mountinfo`, `/proc/swaps`, permisos/propietarios, `systemctl show` y la configuración efectiva con `nginx -T`; **no** ejecuta `swapoff`, `systemctl restart` ni edita archivos. Comprueba que los dos directorios temporales sean de tipo `tmpfs`, propiedad de la cuenta correspondiente y modo `0700`; que la unidad FastAPI esté activa y tenga `TMPDIR`, `RuntimeDirectory`, `UMask=0077` y `LimitCORE=0`; que `/analyze` desactive el buffering y mantenga el límite del cuerpo; y exige que no haya swap activo. **No inspecciona ni imprime secretos** de `EnvironmentFile`.
+
+El verificador falla si detecta swap activo: no puede determinar de forma fiable desde aquí si está cifrado o si usa claves efímeras. En ese caso se necesita una comprobación administrativa independiente, **sin saltarse el aviso**. Ejecutarlo una vez no demuestra que tmpfiles.d restaure la configuración tras reiniciar físicamente el host: registrar también evidencias después de un reinicio controlado y comprobar qué servicios cargaron realmente sus unidades. Desactivar `LimitCORE` en FastAPI no demuestra que el kernel, los workers NGINX o servicios de diagnóstico nunca generen volcados.
+
+Es una herramienta de verificación operativa, no un sello de seguridad: no prueba borrado forense, ausencia de datos en RAM/swap, aislamiento multitenant ni resistencia del parser ante PDFs maliciosos.
+
 ## Operación de FastAPI aislado
 
 La unidad systemd crea el directorio `/run/tramitia-upload` propiedad de `tramitia-web` con modo 0700 en cada arranque. Verificar:
