@@ -7,19 +7,21 @@ requiring customer records or manipulating a real database. NEVER deploy it.
 from __future__ import annotations
 
 import os
-from types import SimpleNamespace
 
 if os.getenv("TRAMITIA_NGINX_UPLOAD_SMOKE") != "1":
     raise RuntimeError("Refusing to start the isolated NGINX upload test fixture")
 
 from app import main as backend
+from app import auth as test_auth
 from app.upload_temporary_storage import verify_private_upload_tmpfs
 
-# Verify the actual worker's tempfile resolution and RAM-backed mount.
+# Verify actual worker spooling in private tmpfs before any request.
 verify_private_upload_tmpfs()
 
-backend.app.app.dependency_overrides[backend.current_principal] = lambda: SimpleNamespace(
-    user_id=1, organization_id=1, role="owner",
+# Only this explicitly gated, localhost-only test fixture accepts synthetic
+# identity (1, 1); production authentication still uses live DB membership.
+test_auth.get_membership_role = lambda user, org, ver: (
+    "owner" if (user, org, ver) == (1, 1, 0) else None
 )
 backend._consume_peer_budget = lambda *_args, **_kwargs: None
 backend.consume_analysis_quota = lambda *_args, **_kwargs: None
