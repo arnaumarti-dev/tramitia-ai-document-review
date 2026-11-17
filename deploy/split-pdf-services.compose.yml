@@ -28,8 +28,11 @@ services:
     mem_limit: 1g
     memswap_limit: 1g
     cpus: 1.0
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    # The PDF subprocess does not require filesystem scratch space.
+    # Unlike a disposable container, a service restart preserves tmpfs
+    # mounts; do not provide a writable /tmp between documents.
+    # The parser socket directory is STILL writable by the parser UID and
+    # remains a B03 blocker until per-document sandbox isolation exists.
     volumes:
       - type: bind
         source: /run/tramitia-parser
