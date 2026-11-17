@@ -34,12 +34,13 @@ def verify_private_dir(path: Path, uid: int, mountinfo: str) -> None:
     if not path.is_absolute():
         raise HostCheckError("Temporary directory must be absolute")
     try:
-        # Reject even a symlink in an ancestor, not merely a symlink at leaf.
-        if path != path.resolve(strict=True):
-            raise HostCheckError(f"{path}: symlinked temporary path")
+        # Resolve even symlinks in an ancestor, not merely at the leaf.
+        resolved = path.resolve(strict=True)
         info = path.lstat()
     except (OSError, RuntimeError) as exc:
         raise HostCheckError(f"{path}: temporary directory missing or inaccessible") from exc
+    if path != resolved:
+        raise HostCheckError(f"{path}: symlinked temporary path")
     if not stat.S_ISDIR(info.st_mode):
         raise HostCheckError(f"{path}: expected a directory")
     if info.st_uid != uid:
