@@ -9,7 +9,10 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-import pwd
+try:
+    import pwd
+except ImportError:  # Windows local development can still import tests.
+    pwd = None
 import re
 import stat
 import subprocess
@@ -116,7 +119,7 @@ def _run_read_only(*args: str) -> str:
 
 
 def verify_host(web_unit: str, nginx_user: str) -> None:
-    if sys.platform != "linux":
+    if sys.platform != "linux" or pwd is None:
         raise HostCheckError("This preflight supports Linux only")
     if web_unit not in ("tramitia-web.service", "tramitia-web-daemonless.service"):
         raise HostCheckError("Unsupported experimental web unit")
