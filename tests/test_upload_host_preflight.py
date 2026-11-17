@@ -18,7 +18,15 @@ SAMPLE_NGINX = """
 http {
   client_body_temp_path /run/tramitia-nginx-body;
   server { client_max_body_size 21m; proxy_http_version 1.1;
+    location = /_tramitia_upload_auth {
+      internal;
+      proxy_pass http://127.0.0.1:8000/auth/me;
+      proxy_pass_request_body off;
+      proxy_set_header Content-Length "";
+      proxy_set_header Authorization $http_authorization;
+    }
     location = /analyze {
+      auth_request /_tramitia_upload_auth;
       proxy_request_buffering off;
       proxy_pass http://127.0.0.1:8000;
     }
@@ -59,6 +67,18 @@ class HostPreflightTests(unittest.TestCase):
             verify_nginx_config(SAMPLE_NGINX.replace(
                 "client_max_body_size 21m;", "client_max_body_size 100m;"
             ))
+        for original, weakened in (
+            ("auth_request /_tramitia_upload_auth;", ""),
+            ("internal;", ""),
+            ("proxy_pass_request_body off;", "proxy_pass_request_body on;"),
+            ('proxy_set_header Content-Length "";', ""),
+            ("proxy_set_header Authorization $http_authorization;", ""),
+            ("proxy_pass http://127.0.0.1:8000/auth/me;",
+             "proxy_pass http://127.0.0.1:8000/public;"),
+        ):
+            with self.subTest(unsafe=weakened):
+                with self.assertRaises(HostCheckError):
+                    verify_nginx_config(SAMPLE_NGINX.replace(original, weakened))
 
     def test_loaded_systemd_settings_cannot_silently_weaken(self):
         verify_systemd_service(VALID_SERVICE, "tramitia-web.service")
