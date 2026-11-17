@@ -41,7 +41,6 @@ docker run --detach --restart unless-stopped --name "$parser" \
   --security-opt=no-new-privileges \
   --pids-limit=32 --memory=1g --memory-swap=1g --cpus=1 \
   --user=65533:65533 --group-add 65534 \
-  --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=8m \
   --mount "type=bind,src=$parser_dir,dst=/run/tramitia-parser" \
   --env TRAMITIA_PDF_BROKER_DAEMONLESS=1 \
   --env TRAMITIA_PDF_WORKER_BACKEND=subprocess \
@@ -101,6 +100,15 @@ import os, socket, errno
 assert os.geteuid() == 65533
 assert not os.path.exists("/run/tramitia/pdf-broker.sock")
 assert not os.path.exists("/var/run/docker.sock")
+# The parser must be unable to save PDF-derived payloads under /tmp,
+# which persists when Docker restarts the same container.
+try:
+    with open("/tmp/tramitia-b03-probe-must-not-exist", "wb") as tmp:
+        tmp.write(b"synthetic")
+except OSError as error:
+    assert error.errno in (errno.EROFS, errno.EACCES, errno.EPERM), error
+else:
+    raise AssertionError("Untrusted parser has writable /tmp across PDF jobs")
 for name in ("TRAMITIA_JWT_SECRET", "POSTGRES_PASSWORD", "DATABASE_URL", "DOCKER_HOST"):
     assert name not in os.environ
 s = socket.socket(); s.settimeout(1)
@@ -134,6 +142,17 @@ print("Broker sees a separate parser UID and read-only socket mount")
 # or consume the parser's single authorized document allowance.
 test "$(docker inspect -f '{{.RestartCount}}' "$parser")" = 0
 
+# Demonstrate the remaining B03 risk without exploiting a PDF: the
+# *parser service UID* can write to its shared socket mount. This benign
+# marker will survive a restart of the same container, showing why one-shot
+# alone is NOT a per-PDF filesystem sandbox. Cleanup removes it afterward.
+docker exec "$parser" python -c '
+from pathlib import Path
+marker = Path("/run/tramitia-parser/b03-synthetic-marker")
+marker.write_text("fictional marker only", encoding="ascii")
+'
+test "$(sudo cat "$parser_dir/b03-synthetic-marker")" = "fictional marker only"
+
 # Real web-account integration with a disposable invented PDF, no JWT/DB.
 cp -a app scripts "$stage_dir/"
 sudo chown -R root:root "$stage_dir"
@@ -165,6 +184,10 @@ for attempt in $(seq 1 45); do
 done
 test "$(docker inspect -f '{{.RestartCount}}' "$parser")" -ge 1
 wait_for_socket "$parser_dir/parser.sock" "$parser"
+test "$(sudo cat "$parser_dir/b03-synthetic-marker")" = "fictional marker only"
+echo "KNOWN B03 LIMITATION: parser socket mount persists across container restart"
+docker exec "$parser" rm -f /run/tramitia-parser/b03-synthetic-marker
+! sudo test -e "$parser_dir/b03-synthetic-marker"
 
 # Process a second invented PDF using the restarted parser service.
 (
