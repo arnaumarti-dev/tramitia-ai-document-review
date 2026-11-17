@@ -103,6 +103,9 @@ jobs:
             -v "$certdir:/etc/nginx/tls:ro" \
             nginx:1.27-alpine nginx -t
 
+      - name: Probe real NGINX TLS → FastAPI PDF upload and crash recovery
+        run: bash tests/smoke_nginx_upload_integration.sh
+
       - name: Install headless Chromium for real browser journey
         run: |
           python -m pip install 'playwright==1.56.0'
