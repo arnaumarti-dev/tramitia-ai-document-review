@@ -106,7 +106,14 @@ test "$(curl_proxy -o "$workdir/health.json" -w '%{http_code}' https://tramitia.
 code=$(curl_proxy -o "$workdir/anonymous.json" -w '%{http_code}' \
   -F "file=@$workdir/twenty.pdf;filename=anonymous.pdf;type=application/pdf" \
   https://tramitia.example.invalid:18443/analyze || true)
-test "$code" = 401 || { echo "Anonymous upload should return 401, got $code" >&2; exit 1; }
+if [[ "$code" != 401 ]]; then
+  echo "Anonymous upload should return 401, got HTTP $code" >&2
+  # Test-only NGINX error output. Do not print tokens, sensitive env or
+  # customer uploads; requests here use synthetic example.invalid data.
+  docker logs --tail 70 "$container" 2>&1 | grep -E 'auth request|upstream|error|emerg|warn' >&2 || true
+  echo "Synthetic unauthenticated proxy integration failed" >&2
+  exit 1
+fi
 check_clean
 echo "Anonymous 20 MiB multipart rejected before FastAPI spool: PASS"
 code=$(curl_proxy -H "Authorization: Bearer $TRAMITIA_B02_TEST_TOKEN" -o "$workdir/accepted.json" -w '%{http_code}' \
