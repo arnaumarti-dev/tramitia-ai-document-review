@@ -5,9 +5,14 @@ Los plazos de conservación y la base jurídica han de aprobarse antes de un pil
 
 ## Inventario mínimo
 
-- **PDF y texto:** el documento se analiza en memoria con un worker. No
-  se guarda el PDF en PostgreSQL ni el texto extraído de los análisis
-  nuevos (`analyses.extracted_text` es NULL). Pueden existir textos heredados.
+- **PDF y texto:** no se guarda el PDF en PostgreSQL ni el texto extraído
+  de los análisis nuevos (`analyses.extracted_text` es NULL). Pueden existir
+  textos heredados. **Durante la subida**, NGINX y Starlette/FastAPI pueden
+  usar archivos temporales con bytes del PDF. En el perfil Linux aislado
+  se propone buffering desactivado en NGINX y temporales privados sobre
+  tmpfs verificada para FastAPI; esto no acredita borrado forense ni evita
+  swap, volcados de memoria u otros residuos. Ver
+  [AUD-B02](AUD_B02_TEMPORALES_PDF_ES.md).
 - **Informes:** la tabla `analyses` conserva nombre de archivo, evaluación
   heurística, observaciones, hash de texto, fecha y organización.
   Estos metadatos pueden contener información personal.
