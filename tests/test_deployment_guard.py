@@ -39,6 +39,11 @@ class IsolatedWebStartupTests(unittest.TestCase):
         })
         self.env.start()
         self.addCleanup(self.env.stop)
+        # Socket/identity tests isolate their subject; tempfs is covered by
+        # tests/test_upload_temporary_storage.py and the actual E2E service.
+        self.temp_guard = patch("app.deployment_guard.verify_private_upload_tmpfs")
+        self.temp_guard.start()
+        self.addCleanup(self.temp_guard.stop)
 
     def tearDown(self):
         if hasattr(self, "sock"):
@@ -193,6 +198,9 @@ class ReferenceUnitTests(unittest.TestCase):
             "InaccessiblePaths=-/run/docker.sock",
             "--host 127.0.0.1", "--no-proxy-headers",
             "NoNewPrivileges=true", "ProtectSystem=strict",
+            "Environment=TMPDIR=/run/tramitia-upload",
+            "RuntimeDirectory=tramitia-upload",
+            "RuntimeDirectoryMode=0700",
         ):
             self.assertIn(required, content)
         self.assertNotIn("SupplementaryGroups=docker", content)

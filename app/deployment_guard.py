@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from app.upload_temporary_storage import verify_private_upload_tmpfs
 import socket
 import stat
 import sys
@@ -52,6 +53,10 @@ def validate_web_deployment() -> None:
         raise RuntimeError("FastAPI must never start as root")
     if os.getenv("TRAMITIA_PDF_WORKER_BACKEND") != "broker":
         raise RuntimeError("Isolated FastAPI must use the PDF broker")
+
+    # UploadFile may spill multipart bytes to disk: require a private, RAM-backed
+    # Python tempfile directory before serving any isolated request.
+    verify_private_upload_tmpfs()
 
     # Docker group permissions or root-equivalent access in the web account
     # would nullify the separation from the privileged broker.

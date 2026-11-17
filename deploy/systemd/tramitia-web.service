@@ -15,10 +15,16 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=TRAMITIA_DEPLOYMENT_PROFILE=isolated
 Environment=TRAMITIA_PDF_WORKER_BACKEND=broker
 Environment=TRAMITIA_BROKER_SOCKET=/run/tramitia/pdf-broker.sock
+# UploadFile temporary spill must live in a service-private /run tmpfs directory.
+Environment=TMPDIR=/run/tramitia-upload
+RuntimeDirectory=tramitia-upload
+RuntimeDirectoryMode=0700
 ExecStart=/opt/tramitia/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-proxy-headers --log-level warning
 Restart=on-failure
 RestartSec=3
 UMask=0077
+# Multipart spooling must not become a readable core image after crashes.
+LimitCORE=0
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

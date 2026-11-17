@@ -112,6 +112,8 @@ Texto extraído -> reglas heurísticas -> puntuación + observaciones
 
 El backend se implementa con **Python, FastAPI, Pydantic, PostgreSQL 16, psycopg2, Alembic y PyJWT**. Las contraseñas se almacenan mediante hashes Argon2id. Las comprobaciones actuales son reglas sobre texto, **no un modelo de IA entrenado ni un sistema de comprensión jurídica avanzada**.
 
+**Temporales de PDF:** `UploadFile` puede volcar parte de la subida a un archivo temporal y NGINX también puede crear temporales de petición. En el perfil Linux aislado de referencia, se exige `TMPDIR` privado en tmpfs y se desactiva el buffering del cuerpo de subida en NGINX, pero son medidas experimentales, no garantías de borrado seguro ni habilitación para tratar datos reales. Consulta [AUD-B02](docs/AUD_B02_TEMPORALES_PDF_ES.md).
+
 Los análisis nuevos guardan informe, hallazgos, hash y metadatos, pero **no conservan el PDF original ni el texto íntegro extraído en PostgreSQL**. Los metadatos y hallazgos aún pueden contener datos personales; además, pueden existir registros históricos de versiones anteriores.
 
 ### Procesamiento PDF y aislamiento
