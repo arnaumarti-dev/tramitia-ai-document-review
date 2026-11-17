@@ -2,7 +2,7 @@
 # AUD-B02: real NGINX TLS -> TramitIA/Starlette multipart via localhost.
 # Synthetic only; requires a disposable Linux Docker runner.
 set -euo pipefail
-if [[ "\${CI:-}" != "true" && "\${TRAMITIA_ALLOW_NGINX_SMOKE:-}" != "1" ]]; then
+if [[ "${CI:-}" != "true" && "${TRAMITIA_ALLOW_NGINX_SMOKE:-}" != "1" ]]; then
   echo "Explicit disposable test environment required" >&2
   exit 2
 fi
@@ -10,7 +10,7 @@ test "$(findmnt -no FSTYPE -T /dev/shm)" = "tmpfs"
 workdir=$(mktemp -d)
 upload_dir=$(mktemp -d /dev/shm/tramitia-b02-proxy.XXXXXXXX)
 chmod 0700 "$upload_dir"
-container="tramitia-b02-nginx-\${GITHUB_RUN_ID:-local}-\${GITHUB_RUN_ATTEMPT:-1}"
+container="tramitia-b02-nginx-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
 server_pid=""
 hold_pid=""
 cleanup() {
