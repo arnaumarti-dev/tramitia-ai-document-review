@@ -12,6 +12,12 @@ En FastAPI, `UploadFile = File(...)` obliga a parsear el cuerpo multipart antes 
 
 Tras terminar el cuerpo, FastAPI vuelve a comprobar `current_principal`, impidiendo que una revocación durante una subida larga quede aceptada por una validación antigua. La capa externa `UploadBodyLimit` sigue rechazando Content-Length declarado por encima del límite con 413, incluso si el cliente está anónimo: no se consume ningún byte para ello. Por tanto, **un 413 externo puede preceder al 401**.
 
+## Autenticación previa en NGINX al integrar ambas medidas
+
+Con `proxy_request_buffering off`, el cierre anticipado de FastAPI durante una subida anónima grande puede convertirse en HTTP 502. La integración introduce `auth_request /_tramitia_upload_auth`: NGINX hace una **petición interna GET /auth/me**, sin cuerpo, antes de transmitir el PDF al backend. El URI interno es inaccesible directamente y propaga exclusivamente la cabecera Authorization esperada. La prueba NGINX→FastAPI verifica 401 anónimo, 200 para PDF ficticio autenticado de 20 MiB, 413 por exceso de tamaño, desconexión y recuperación tras SIGKILL.
+
+Una petición autenticada válida provoca **hasta tres comprobaciones de membresía** (subrequest NGINX, middleware ASGI y dependencia del endpoint). Falta medir latencia, consumo de conexiones a PostgreSQL y carga con usuarios concurrentes. Las caídas del verificador fallan cerradas, pero la respuesta del proxy puede ser HTTP 500 en lugar de 503; se requiere tratamiento operacional y métricas antes del despliegue.
+
 ## Pruebas
 
 `tests/test_upload_auth_preflight.py` incluye comprobaciones ASGI sin lectura del cuerpo para solicitudes anónimas, con token vencido/revocado, credenciales duplicadas y errores de conexión; confirma que el resto de rutas no cambia. Una prueba de integración `TestClient` inspecciona que Starlette **no crea** `SpooledTemporaryFile` para peticiones rechazadas y que la petición autenticada continúa pasando por la extracción ficticia tras la doble comprobación de pertenencia.
@@ -21,7 +27,7 @@ Tras terminar el cuerpo, FastAPI vuelve a comprobar `current_principal`, impidie
 - Una credencial válida todavía puede forzar spooling multipart antes de los contadores de cuota que se aplican en el endpoint (prioridad de siguiente fase). La comprobación temprana **duplica la consulta de membresía**, que hay que perfilar y monitorizar.
 - Una solicitud sin credenciales aún gasta recursos de TLS/NGINX/cabeceras; este cambio **no es protección DDoS**, límite de concurrencia ni sustituto de `client_body_timeout`, límites de body y rate-limit del proxy.
 - El middleware y los endpoints con dependencias no comparten una identidad cacheada porque la revalidación reduce la ventana de revocación. Las credenciales aceptadas pueden quedar revocadas antes de procesar el documento y no se reserva cuota antes del parseo multipart.
-- **Compatibilidad con AUD-B02 (PR #15):** su fixture sintético de NGINX y pruebas que usan sustituciones de `current_principal` deben enviar un JWT de prueba válido o mockear este guard cuando ambas ramas se integren. No fusionar cambios sin rebasar y ejecutar CI de integración conjunta.
+- **Compatibilidad con AUD-B02 (PR #15):** la rama conjunta de la PR #17 adapta el fixture de NGINX y las pruebas multipart de 20 MiB para usar un JWT ficticio y comprobar membresía, tanto antes como después de la subida. La CI conjunta ha terminado en verde, pero ninguna prueba sustituye la revisión de un host Linux de laboratorio.
 - Un sistema listo para documentos de clientes requerirá completar AUD-B01–B04, seguridad de dependencias y revisión independiente.
 
 No cambia la demo Render, ni las políticas de retención, ni los despliegues de producción.
