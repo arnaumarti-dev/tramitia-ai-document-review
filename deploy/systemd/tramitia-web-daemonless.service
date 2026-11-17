@@ -23,6 +23,8 @@ ExecStart=/opt/tramitia/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.
 Restart=on-failure
 RestartSec=3
 UMask=0077
+# Multipart spooling must not become a readable core image after crashes.
+LimitCORE=0
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
