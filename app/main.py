@@ -24,6 +24,7 @@ from app.peer_rate_limit import (
     enforce_peer_rate_limit, resolve_request_peer, PeerRateLimited, PeerRateLimitUnavailable,
 )
 from app.upload_body_limit import UploadBodyLimit
+from app.upload_auth_preflight import UploadAuthenticationPreflight
 from app.deployment_guard import validate_web_deployment
 
 from app.schemas.report import Report
@@ -378,4 +379,8 @@ def get_analyses(
 
 # Keep the request-size guard OUTSIDE FastAPI's multipart parser and error
 # middleware so an oversized streaming upload gets HTTP 413, not HTTP 500.
-app = UploadBodyLimit(app)
+# The outer body-size limit rejects advertised oversize bodies immediately.
+# For remaining POST /analyze requests, authenticate BEFORE Starlette reads
+# and potentially spools multipart bytes. The dependency rechecks membership
+# after upload to guard against revocation while the body is in flight.
+app = UploadBodyLimit(UploadAuthenticationPreflight(app))
